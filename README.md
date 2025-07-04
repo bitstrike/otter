@@ -1,6 +1,9 @@
 # Otter Window Switcher
 
-A sleek window switcher for GTK based window managers that appears when you move your mouse to the top of the screen.
+A sleek window switcher schmooze-coded with Cursor and probably usable on most GTK based window managers. 
+Why? I wanted a task switcher like ALT+TAB but wanted it to activate with the mouse location instead of the keyboard.
+
+![otter in action](otter.png)
 
 ## Features
 
@@ -100,7 +103,9 @@ python3 otter.py --help
 - `--notitle`: Disable the fancy title bar to save screen space
 - `--delay MILLISECONDS`: Delay in milliseconds before hiding the window (default: 0)
 
-**Note:** `--nrows` and `--ncols` are mutually exclusive. Specify only one of them. 
+**Notes:**
+* Using --delay causes flickering on the window draw. Tried schmoozing it out with Cursor and Claude but got nowhwere so meh.
+* `--nrows` and `--ncols` are mutually exclusive. Specify only one of them. 
 ```
 
 ## How It Works
