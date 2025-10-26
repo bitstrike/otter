@@ -32,7 +32,9 @@ try:
 except ImportError:
     GdkX11 = None
 import subprocess
+import warnings
 import os
+os.environ['NO_AT_BRIDGE'] = '1' # suppress accessibility warnings.
 import signal
 import sys
 import argparse
@@ -88,6 +90,7 @@ class OtterWindowSwitcher:
         # Connect to window changes
         self.screen_wnck.connect("window-opened", self.on_window_changed)
         self.screen_wnck.connect("window-closed", self.on_window_changed)
+        self.last_valid_screenshots = {}
 
     def get_default_config(self):
         """Get default configuration"""
@@ -244,25 +247,55 @@ class OtterWindowSwitcher:
             pid = app.get_pid() if app else 0
             return f"{window.get_name()}_{pid}"
 
+    # Update the capture_high_quality_screenshot method:
     def capture_high_quality_screenshot(self, window):
-        """Capture a high-quality screenshot of a window"""
+        """Capture high-quality screenshot, handling minimized windows."""
         try:
-            # Method 1: Try to get the window's own GDK window for isolated capture
+            window_id = self.get_window_id(window)
+            
+            # If window is minimized, use last known valid screenshot
+            if window.is_minimized():
+                if window_id in self.last_valid_screenshots:
+                    return self.last_valid_screenshots[window_id]
+                else:
+                    # No valid screenshot available, return None to use icon
+                    return None
+            
+            # Try to capture screenshot for non-minimized windows
             isolated_pixbuf = self.capture_isolated_window(window)
             if isolated_pixbuf:
-                return self.scale_pixbuf_high_quality(isolated_pixbuf)
+                scaled = self.scale_pixbuf_high_quality(isolated_pixbuf)
+                if scaled:
+                    # Store as last valid screenshot
+                    self.last_valid_screenshots[window_id] = scaled
+                    return scaled
 
-            # Method 2: Try to temporarily raise the window and capture it
             raised_pixbuf = self.capture_with_temporary_raise(window)
             if raised_pixbuf:
-                return self.scale_pixbuf_high_quality(raised_pixbuf)
+                scaled = self.scale_pixbuf_high_quality(raised_pixbuf)
+                if scaled:
+                    self.last_valid_screenshots[window_id] = scaled
+                    return scaled
 
-            # Method 3: Fallback to regular screen capture (with overlaps)
-            return self.capture_screen_area(window)
+            # Fallback to screen area capture
+            screen_pixbuf = self.capture_screen_area(window)
+            if screen_pixbuf:
+                self.last_valid_screenshots[window_id] = screen_pixbuf
+                return screen_pixbuf
+                
+            # If all fails and we have a cached screenshot, use it
+            if window_id in self.last_valid_screenshots:
+                return self.last_valid_screenshots[window_id]
 
         except Exception as e:
-            print(f"Error capturing high-quality screenshot: {e}")
-            return None
+            print(f"Error capturing screenshot: {e}")
+            # Try to return cached screenshot on error
+            window_id = self.get_window_id(window)
+            if window_id in self.last_valid_screenshots:
+                return self.last_valid_screenshots[window_id]
+
+        return None
+
 
     def capture_isolated_window(self, window):
         """Try to capture the window content directly without overlaps"""
@@ -1126,38 +1159,57 @@ class OtterWindowSwitcher:
         menu.show_all()
         menu.popup_at_pointer(None)  # Show the menu at the current pointer position
 
+
+    # Replace the on_move_to_display method:
     def on_move_to_display(self, menu_item, window):
-        """Move the application to the current display"""
+        """Move app to current display and workspace."""
         try:
-            # Get the current active workspace
+            # Get current workspace
             active_workspace = self.screen_wnck.get_active_workspace()
+            
+            # Move window to current workspace
+            if active_workspace:
+                window.move_to_workspace(active_workspace)
 
-            # Move the window to the current workspace
-            window.move_to_workspace(active_workspace)
-
-            # Get the current monitor geometry
+            # Get current display geometry
             display = Gdk.Display.get_default()
-            monitor = display.get_primary_monitor()
+            seat = display.get_default_seat()
+            pointer = seat.get_pointer()
+            screen, x, y = pointer.get_position()
+            monitor = display.get_monitor_at_point(x, y)
             geometry = monitor.get_geometry()
 
-            # Move the window to the current monitor
-            window.move(geometry.x, geometry.y)
+            # Use set_geometry instead of move()
+            current_geom = window.get_geometry()
+            window.set_geometry(
+                Wnck.WindowGravity.CURRENT,
+                Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y,
+                geometry.x + 50, geometry.y + 50,  # Offset from edge
+                current_geom.width, current_geom.height
+            )
 
         except Exception as e:
             print(f"Error moving app to current display: {e}")
+            
 
+    # Fix 2: Fix WindowMoveResizeMask attribute error
+    # Replace the on_resize_to_display method:
     def on_resize_to_display(self, menu_item, window):
-        """Resize the application to fit the current display"""
+        """Resize app to current display."""
         try:
-            # Get the current monitor geometry
+            # Get current display geometry
             display = Gdk.Display.get_default()
-            monitor = display.get_primary_monitor()
+            seat = display.get_default_seat()
+            pointer = seat.get_pointer()
+            screen, x, y = pointer.get_position()
+            monitor = display.get_monitor_at_point(x, y)
             geometry = monitor.get_geometry()
 
-            # Resize the window to fit the current monitor
+            # Use proper Wnck constants
             window.set_geometry(
                 Wnck.WindowGravity.CURRENT,
-                Wnck.WindowMoveResizeMask.MOVE | Wnck.WindowMoveResizeMask.RESIZE,
+                Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y | 
+                Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
                 geometry.x, geometry.y,
                 geometry.width, geometry.height
             )
@@ -1203,30 +1255,34 @@ class OtterWindowSwitcher:
         except Exception as e:
             print(f"Error moving app to workspace: {e}")
 
+
+    # Replace the on_drag_app method:
     def on_drag_app(self, menu_item, window):
-        """Enable drag mode for the application"""
+        """Start drag mode - position cursor on title bar."""
         try:
-            # Get window center
+            # Get window geometry
             geometry = window.get_geometry()
-            center_x = geometry.x + geometry.width // 2
-            center_y = geometry.y + geometry.height // 2
             
-            # Move cursor to window center
+            # Position cursor on title bar (top center of window)
+            title_bar_x = geometry.x + geometry.width // 2
+            title_bar_y = geometry.y + 15  # Approximate title bar height
+            
+            # Warp cursor to title bar
             display = Gdk.Display.get_default()
             seat = display.get_default_seat()
             pointer = seat.get_pointer()
-            pointer.warp(display.get_default_screen(), center_x, center_y)
+            pointer.warp(display.get_default_screen(), title_bar_x, title_bar_y)
             
-            # Start drag tracking
+            # Set drag mode
             self.drag_window = window
             self.drag_active = True
             
-            # Connect to button press to stop dragging
+            # Connect click handler to end drag
             self.window.connect("button-press-event", self.on_drag_click)
             
         except Exception as e:
             print(f"Error starting drag mode: {e}")
-
+        
     def on_drag_click(self, widget, event):
         """Stop drag mode when clicked"""
         if hasattr(self, 'drag_active') and self.drag_active:
@@ -1236,8 +1292,9 @@ class OtterWindowSwitcher:
         return False
 
 
+    # Fix 6: Update the cleanup method to clear last valid screenshots
     def cleanup(self):
-        """Clean up resources"""
+        """Clean up resources."""
         if self.monitor_id:
             GLib.source_remove(self.monitor_id)
             self.monitor_id = None
@@ -1246,8 +1303,10 @@ class OtterWindowSwitcher:
             GLib.source_remove(self.screenshot_monitor_id)
             self.screenshot_monitor_id = None
 
-        # Clear screenshot cache
+        # Clear caches
         self.screenshot_cache.clear()
+        if hasattr(self, 'last_valid_screenshots'):
+            self.last_valid_screenshots.clear()
 
     def run(self):
         """Run the application"""
