@@ -29,6 +29,7 @@ import os
 import sys
 import signal
 import argparse
+import time
 from typing import List, Dict, Optional, Tuple
 import colorsys
 
@@ -115,7 +116,8 @@ class OtterWindowSwitcher:
                 'north': args.north,
                 'south': args.south,
                 'east': args.east,
-                'west': args.west
+                'west': args.west,
+                'recent': args.recent
             }
         else:
             self.config = self.get_default_config()
@@ -154,6 +156,10 @@ class OtterWindowSwitcher:
         self.window_buttons = []
         self.max_cache_size = 100  # Limit cache size to 100 windows
 
+        # Most Recently Used (MRU) tracking
+        # Dictionary mapping window XID to timestamp of last activation
+        self.mru_timestamps = {}
+
         # Monitoring IDs
         self.monitor_id = None
         self.screenshot_monitor_id = None
@@ -186,7 +192,8 @@ class OtterWindowSwitcher:
             'north': True,  # Default to north edge
             'south': False,
             'east': False,
-            'west': False
+            'west': False,
+            'recent': False  # Most recently used ordering
         }
 
     def calculate_layout_dimensions(self, window_count):
@@ -779,6 +786,18 @@ class OtterWindowSwitcher:
             logger.error(f"Error getting user windows: {e}")
             return []
 
+        # Apply MRU ordering if --recent flag is enabled
+        if self.config.get('recent', False):
+            # First, sort alphabetically by application name
+            windows.sort(key=lambda w: w['app_name'].lower())
+
+            # Then, stable sort by MRU timestamp (most recent first)
+            # Windows with no timestamp get timestamp 0 (appear at the end)
+            try:
+                windows.sort(key=lambda w: self.mru_timestamps.get(w['window'].get_xid(), 0), reverse=True)
+            except Exception as e:
+                logger.debug(f"Error applying MRU sort: {e}")
+
         return windows
 
     def create_window_thumbnail(self, window_info: Dict) -> Gtk.Widget:
@@ -1172,6 +1191,15 @@ class OtterWindowSwitcher:
             timestamp = Gtk.get_current_event_time()
             window.activate(timestamp)
 
+            # Record MRU timestamp if --recent flag is enabled
+            if self.config.get('recent', False):
+                try:
+                    xid = window.get_xid()
+                    self.mru_timestamps[xid] = time.time()
+                    logger.debug(f"Updated MRU timestamp for window XID {xid}")
+                except Exception as e:
+                    logger.debug(f"Error recording MRU timestamp: {e}")
+
             # Mark that a window was clicked - don't hide immediately
             # The window will be hidden when mouse leaves (respecting --delay)
             self.window_clicked = True
@@ -1468,6 +1496,15 @@ class OtterWindowSwitcher:
             # Activate the window
             window.activate(Gtk.get_current_event_time())
 
+            # Record MRU timestamp if --recent flag is enabled
+            if self.config.get('recent', False):
+                try:
+                    xid = window.get_xid()
+                    self.mru_timestamps[xid] = time.time()
+                    logger.debug(f"Updated MRU timestamp for window XID {xid}")
+                except Exception as e:
+                    logger.debug(f"Error recording MRU timestamp: {e}")
+
         except Exception as e:
             logger.error(f"Error switching to app: {e}")
 
@@ -1617,6 +1654,9 @@ Examples:
 
     parser.add_argument('--delay', type=int, default=0, metavar='MILLISECONDS',
                         help='Delay in milliseconds before hiding the window (default: 0)')
+
+    parser.add_argument('--recent', action='store_true',
+                        help='Order thumbnails by most recently used (MRU), with recently selected windows appearing first')
 
     # Add mutually exclusive group for screen edges
     edge_group = parser.add_mutually_exclusive_group()
