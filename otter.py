@@ -708,6 +708,10 @@ class OtterWindowSwitcher:
             return windows
 
         try:
+            # CRITICAL: Force Wnck to update its internal state before querying
+            # This prevents accessing stale/corrupted WnckClassGroup objects
+            self.screen_wnck.force_update()
+
             # Get all windows from Wnck
             window_list = self.screen_wnck.get_windows()
             if not window_list:
