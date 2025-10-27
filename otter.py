@@ -24,25 +24,86 @@ step-by-step, consider this python application below for a mouse driven x11 appl
 
 # Otter - X11 Window Switcher for Ubuntu Cinnamon Desktop
 import gi
-gi.require_version("Gtk", "3.0")
-gi.require_version("Wnck", "3.0")
-from gi.repository import Gtk, Gdk, Wnck, GLib
+import logging
+import os
+import sys
+import signal
+import argparse
+from typing import List, Dict, Optional, Tuple
+import colorsys
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Detect and set GTK version BEFORE any imports
+# IMPORTANT: Wnck 3.0 requires GTK 3.0, so we need to check compatibility
+gtk_version = None
+
+# First, try to load Wnck to see what GTK version it requires
+try:
+    gi.require_version("Wnck", "3.0")
+    # Wnck 3.0 is available - it requires GTK 3.0
+    gi.require_version("Gtk", "3.0")
+    gtk_version = "3.0"
+    logger.info("Using GTK 3.0 (required by Wnck 3.0)")
+except ValueError as e:
+    # Wnck 3.0 not available or incompatible
+    logger.warning(f"Wnck 3.0 setup failed: {e}")
+    try:
+        # Try alternative setup with GTK 4.0 and older Wnck
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Wnck", "3.0")
+        gtk_version = "4.0"
+        logger.info("Using GTK 4.0 with Wnck")
+    except ValueError:
+        try:
+            # Fallback: GTK 3.0 only
+            gi.require_version("Gtk", "3.0")
+            try:
+                gi.require_version("Wnck", "3.0")
+            except ValueError:
+                logger.warning("Wnck not available, proceeding without window management")
+            gtk_version = "3.0"
+            logger.info("Using GTK 3.0")
+        except ValueError:
+            logger.error("Neither GTK 4.0 nor GTK 3.0 available")
+            sys.exit(1)
+
+# Import after versions are set
+from gi.repository import Gtk, Gdk, GLib, GdkPixbuf
+
+# Try to import Wnck (may not be available)
+try:
+    from gi.repository import Wnck
+    WNCK_AVAILABLE = True
+except ImportError:
+    logger.warning("Wnck not available - window management features disabled")
+    Wnck = None
+    WNCK_AVAILABLE = False
+
 try:
     from gi.repository import GdkX11
+    WAYLAND_SUPPORT = False
 except ImportError:
     GdkX11 = None
-import subprocess
-import warnings
-import os
-os.environ['NO_AT_BRIDGE'] = '1' # suppress accessibility warnings.
-import signal
-import sys
-import argparse
-from typing import List, Dict, Optional
+    logger.info("GdkX11 not available - Wayland compatibility mode enabled")
+    WAYLAND_SUPPORT = True
+
+# Suppress accessibility warnings if available
+try:
+    os.environ['NO_AT_BRIDGE'] = '1'
+except Exception:
+    pass
 
 class OtterWindowSwitcher:
     def __init__(self, args=None):
         """Initialize the window switcher"""
+        logger.info("Initializing Otter Window Switcher")
+
         # Parse arguments and set up configuration
         if args:
             self.config = {
@@ -60,25 +121,47 @@ class OtterWindowSwitcher:
             self.config = self.get_default_config()
 
         # Initialize GTK and Wnck
-        Gtk.init()
-        self.screen_wnck = Wnck.Screen.get_default()
-        self.screen_wnck.force_update()
+        try:
+            Gtk.init()
+        except Exception as e:
+            logger.error(f"Failed to initialize GTK: {e}")
+            raise
+
+        # Initialize Wnck if available
+        if WNCK_AVAILABLE:
+            try:
+                self.screen_wnck = Wnck.Screen.get_default()
+                self.screen_wnck.force_update()
+            except Exception as e:
+                logger.error(f"Failed to initialize Wnck: {e}")
+                self.screen_wnck = None
+        else:
+            logger.warning("Wnck not available - window switching disabled")
+            self.screen_wnck = None
 
         # Window state
         self.window = None
         self.is_visible = False
         self.window_clicked = False
 
-        # Screenshot cache
+        # Drag mode state - initialize here to avoid AttributeError
+        self.drag_active = False
+        self.drag_window = None
+        self.drag_signal_id = None
+
+        # Screenshot cache with size limit
         self.screenshot_cache = {}
         self.window_buttons = []
+        self.max_cache_size = 100  # Limit cache size to 100 windows
 
         # Monitoring IDs
         self.monitor_id = None
         self.screenshot_monitor_id = None
+        self.delayed_hide_id = None
 
         # Cache update interval
         self.cache_update_interval = 2000  # 2 seconds
+        self.last_valid_screenshots = {}
 
         # Set up the window
         self.create_window()
@@ -88,9 +171,9 @@ class OtterWindowSwitcher:
         self.setup_screenshot_caching()
 
         # Connect to window changes
-        self.screen_wnck.connect("window-opened", self.on_window_changed)
-        self.screen_wnck.connect("window-closed", self.on_window_changed)
-        self.last_valid_screenshots = {}
+        if self.screen_wnck:
+            self.screen_wnck.connect("window-opened", self.on_window_changed)
+            self.screen_wnck.connect("window-closed", self.on_window_changed)
 
     def get_default_config(self):
         """Get default configuration"""
@@ -143,7 +226,7 @@ class OtterWindowSwitcher:
             monitor_height = geometry.height
             
             # Handle drag mode
-            if hasattr(self, 'drag_active') and self.drag_active and hasattr(self, 'drag_window'):
+            if self.drag_active and self.drag_window:
                 try:
                     # Move window to follow mouse
                     geometry = self.drag_window.get_geometry()
@@ -151,7 +234,7 @@ class OtterWindowSwitcher:
                     new_y = y - geometry.height // 2
                     self.drag_window.move(new_x, new_y)
                 except Exception as e:
-                    print(f"Error in drag mode: {e}")
+                    logger.error(f"Error in drag mode: {e}")
                     self.drag_active = False
             
             # Only check for edge trigger when window is NOT visible
@@ -182,7 +265,7 @@ class OtterWindowSwitcher:
                     # Hide when mouse moves away from the edge AND not in window
                     self.hide_window()
         except Exception as e:
-            print(f"Error checking mouse position: {e}")
+            logger.error(f"Error checking mouse position: {e}")
         return True  # Continue monitoring
 
 
@@ -207,12 +290,31 @@ class OtterWindowSwitcher:
             return (window_x <= x <= window_x + window_width and
                     window_y <= y <= window_y + window_height)
         except Exception as e:
-            print(f"Error checking mouse in window: {e}")
+            logger.error(f"Error checking mouse in window: {e}")
             return False
 
     def update_screenshot_cache(self):
         """Update screenshot cache for all visible windows"""
         try:
+            # Only update if switcher is visible (avoid long idle processing)
+            if not self.is_visible:
+                # Clean up old cache entries even when not visible
+                try:
+                    if self.screen_wnck:
+                        current_windows = self.get_user_windows()
+                        existing_window_ids = {self.get_window_id(w['window']) for w in current_windows}
+                        cached_window_ids = set(self.screenshot_cache.keys())
+
+                        for window_id in cached_window_ids - existing_window_ids:
+                            try:
+                                del self.screenshot_cache[window_id]
+                                del self.last_valid_screenshots[window_id]
+                            except (KeyError, AttributeError):
+                                pass
+                except Exception as e:
+                    logger.debug(f"Error cleaning cache during idle: {e}")
+                return True
+
             current_windows = self.get_user_windows()
 
             # Clean up cache for windows that no longer exist
@@ -220,20 +322,40 @@ class OtterWindowSwitcher:
             cached_window_ids = set(self.screenshot_cache.keys())
 
             for window_id in cached_window_ids - existing_window_ids:
-                del self.screenshot_cache[window_id]
+                try:
+                    del self.screenshot_cache[window_id]
+                    if window_id in self.last_valid_screenshots:
+                        del self.last_valid_screenshots[window_id]
+                except (KeyError, AttributeError):
+                    pass
+
+            # Enforce cache size limit
+            if len(self.screenshot_cache) > self.max_cache_size:
+                # Remove oldest entries (simple FIFO)
+                keys_to_remove = list(self.screenshot_cache.keys())[:(len(self.screenshot_cache) - self.max_cache_size)]
+                for key in keys_to_remove:
+                    try:
+                        del self.screenshot_cache[key]
+                        if key in self.last_valid_screenshots:
+                            del self.last_valid_screenshots[key]
+                    except (KeyError, AttributeError):
+                        pass
 
             # Update screenshots for current windows
             for window_info in current_windows:
-                window = window_info['window']
-                window_id = self.get_window_id(window)
+                try:
+                    window = window_info['window']
+                    window_id = self.get_window_id(window)
 
-                # Capture screenshot
-                screenshot = self.capture_high_quality_screenshot(window)
-                if screenshot:
-                    self.screenshot_cache[window_id] = screenshot
+                    # Capture screenshot
+                    screenshot = self.capture_high_quality_screenshot(window)
+                    if screenshot:
+                        self.screenshot_cache[window_id] = screenshot
+                except Exception as e:
+                    logger.debug(f"Error capturing screenshot for window: {e}")
 
         except Exception as e:
-            print(f"Error updating screenshot cache: {e}")
+            logger.error(f"Error updating screenshot cache: {e}")
 
         return True  # Continue periodic updates
 
@@ -288,7 +410,7 @@ class OtterWindowSwitcher:
                 return self.last_valid_screenshots[window_id]
 
         except Exception as e:
-            print(f"Error capturing screenshot: {e}")
+            logger.error(f"Error capturing screenshot: {e}")
             # Try to return cached screenshot on error
             window_id = self.get_window_id(window)
             if window_id in self.last_valid_screenshots:
@@ -324,7 +446,7 @@ class OtterWindowSwitcher:
                     return pixbuf
 
         except Exception as e:
-            print(f"Error in isolated capture: {e}")
+            logger.error(f"Error in isolated capture: {e}")
 
         return None
 
@@ -335,6 +457,9 @@ class OtterWindowSwitcher:
             if window.is_minimized():
                 return None
 
+            if not self.screen_wnck:
+                return None
+
             # Store current active window
             active_window = self.screen_wnck.get_active_window()
 
@@ -342,10 +467,19 @@ class OtterWindowSwitcher:
             timestamp = Gtk.get_current_event_time()
             window.activate(timestamp)
 
-            # Small delay to ensure window is raised
-            import time
-            time.sleep(0.1)
+            # Use GLib timeout instead of blocking sleep
+            # For now, we'll do a short non-blocking idle call
+            GLib.idle_add(self._do_capture_after_raise, window, active_window, timestamp)
+            return None  # Will be handled asynchronously
 
+        except Exception as e:
+            logger.error(f"Error in temporary raise capture: {e}")
+
+        return None
+
+    def _do_capture_after_raise(self, window, active_window, timestamp):
+        """Capture window content after it has been raised (called via idle callback)"""
+        try:
             # Capture the window area
             geometry = window.get_geometry()
             x, y, width, height = geometry
@@ -354,16 +488,21 @@ class OtterWindowSwitcher:
                 root_window = Gdk.get_default_root_window()
                 pixbuf = Gdk.pixbuf_get_from_window(root_window, x, y, width, height)
 
+                # Store in cache
+                window_id = self.get_window_id(window)
+                if pixbuf:
+                    scaled = self.scale_pixbuf_high_quality(pixbuf)
+                    if scaled:
+                        self.screenshot_cache[window_id] = scaled
+
                 # Restore the previously active window
-                if active_window and active_window != window:
+                if active_window and active_window != window and self.screen_wnck:
                     active_window.activate(timestamp + 1)
 
-                return pixbuf
-
         except Exception as e:
-            print(f"Error in temporary raise capture: {e}")
+            logger.error(f"Error in deferred capture: {e}")
 
-        return None
+        return False
 
     def capture_screen_area(self, window):
         """Fallback method: capture screen area (may include overlaps)"""
@@ -380,7 +519,7 @@ class OtterWindowSwitcher:
             return self.scale_pixbuf_high_quality(pixbuf) if pixbuf else None
 
         except Exception as e:
-            print(f"Error in screen area capture: {e}")
+            logger.error(f"Error in screen area capture: {e}")
             return None
 
     def scale_pixbuf_high_quality(self, pixbuf):
@@ -408,26 +547,35 @@ class OtterWindowSwitcher:
                 new_width = int(original_width * scale)
                 new_height = int(original_height * scale)
 
-                # Use high-quality scaling
-                scaled_pixbuf = pixbuf.scale_simple(new_width, new_height, 3)  # GdkPixbuf.InterpType.HYPER
+                # Use high-quality scaling with proper enum
+                scaled_pixbuf = pixbuf.scale_simple(
+                    new_width, new_height,
+                    GdkPixbuf.InterpType.HYPER
+                )
                 return scaled_pixbuf
 
         except Exception as e:
-            print(f"Error scaling pixbuf: {e}")
+            logger.error(f"Error scaling pixbuf: {e}")
 
         return None
 
     def create_window(self):
         """Create the main application window"""
         self.window = Gtk.Window()
-        self.window.set_title("🦦 Otter App Switcher")
+        self.window.set_title("Otter App Switcher")  # Removed emoji for professional appearance
         self.window.set_decorated(False)  # No window decorations
         self.window.set_keep_above(True)  # Keep window on top
         self.window.set_skip_taskbar_hint(True)  # Don't show in taskbar
         self.window.set_skip_pager_hint(True)  # Don't show in pager
 
         # Set window type hint for proper behavior
-        self.window.set_type_hint(Gdk.WindowTypeHint.DOCK)
+        # POPUP is GTK 4.0+, use UTILITY for GTK 3.0 compatibility
+        try:
+            # Try POPUP first (GTK 4.0)
+            self.window.set_type_hint(Gdk.WindowTypeHint.POPUP)
+        except AttributeError:
+            # Fallback to UTILITY (GTK 3.0)
+            self.window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
 
         # Connect signals
         self.window.connect("destroy", self.on_destroy)
@@ -556,35 +704,76 @@ class OtterWindowSwitcher:
         """Get list of user windows, including minimized windows"""
         windows = []
 
-        # Get all windows from Wnck
-        for window in self.screen_wnck.get_windows():
-            # Include normal windows, even if minimized
-            if window.get_window_type() == Wnck.WindowType.NORMAL:
-                # Safe handling of application - check if it exists first
-                app = window.get_application()
-                app_name = app.get_name() if app else "Unknown"
-                window_name = window.get_name() or "Unknown"
+        if not self.screen_wnck:
+            return windows
 
-                # Skip common system applications and our own window
-                system_apps = [
-                    'gnome-shell', 'cinnamon', 'gnome-settings-daemon',
-                    'gnome-panel', 'mate-panel', 'xfce4-panel', 'plasma-desktop',
-                    'kwin', 'compiz', 'metacity', 'mutter', 'unity',
-                    'unity-panel-service', 'Desktop', 'Otter Window Switcher'
-                ]
+        try:
+            # Get all windows from Wnck
+            window_list = self.screen_wnck.get_windows()
+            if not window_list:
+                return windows
 
-                # Skip if it's a system app or our own window
-                if (app_name.lower() not in [app.lower() for app in system_apps] and
-                    window_name != "Otter Window Switcher" and
-                    window_name and len(window_name.strip()) > 0):
+            for window in window_list:
+                try:
+                    # Validate window object is still valid
+                    if not window or window is None:
+                        continue
 
-                    windows.append({
-                        'window': window,
-                        'name': window_name,
-                        'app_name': app_name,
-                        'icon': window.get_icon() if window.get_icon() else None,
-                        'is_minimized': window.is_minimized()
-                    })
+                    # Include normal windows, even if minimized
+                    window_type = window.get_window_type()
+                    if window_type != Wnck.WindowType.NORMAL:
+                        continue
+
+                    # Safe handling of application - check if it exists first
+                    try:
+                        app = window.get_application()
+                        app_name = app.get_name() if app else "Unknown"
+                    except Exception:
+                        app_name = "Unknown"
+
+                    try:
+                        window_name = window.get_name() or "Unknown"
+                    except Exception:
+                        window_name = "Unknown"
+
+                    # Skip common system applications and our own window
+                    system_apps = [
+                        'gnome-shell', 'cinnamon', 'gnome-settings-daemon',
+                        'gnome-panel', 'mate-panel', 'xfce4-panel', 'plasma-desktop',
+                        'kwin', 'compiz', 'metacity', 'mutter', 'unity',
+                        'unity-panel-service', 'Desktop', 'Otter Window Switcher'
+                    ]
+
+                    # Skip if it's a system app or our own window
+                    if (app_name.lower() not in [app.lower() for app in system_apps] and
+                        window_name != "Otter Window Switcher" and
+                        window_name and len(window_name.strip()) > 0):
+
+                        try:
+                            is_minimized = window.is_minimized()
+                        except Exception:
+                            is_minimized = False
+
+                        try:
+                            icon = window.get_icon() if window.get_icon() else None
+                        except Exception:
+                            icon = None
+
+                        windows.append({
+                            'window': window,
+                            'name': window_name,
+                            'app_name': app_name,
+                            'icon': icon,
+                            'is_minimized': is_minimized
+                        })
+
+                except Exception as e:
+                    logger.debug(f"Error processing window: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error getting user windows: {e}")
+            return []
 
         return windows
 
@@ -706,7 +895,7 @@ class OtterWindowSwitcher:
             return self.create_fallback_thumbnail(window)
 
         except Exception as e:
-            print(f"Error creating thumbnail: {e}")
+            logger.error(f"Error creating thumbnail: {e}")
             return self.create_fallback_thumbnail(window)
 
     def capture_window_screenshot(self, window):
@@ -733,7 +922,7 @@ class OtterWindowSwitcher:
             return pixbuf
 
         except Exception as e:
-            print(f"Error capturing window screenshot: {e}")
+            logger.error(f"Error capturing window screenshot: {e}")
             return None
 
     def create_fallback_thumbnail(self, window):
@@ -784,57 +973,87 @@ class OtterWindowSwitcher:
 
     def populate_windows(self):
         """Populate the window list with current windows"""
-        # Clear existing buttons
-        for child in self.flow_box.get_children():
-            self.flow_box.remove(child)
+        try:
+            # Clear existing buttons safely
+            try:
+                for child in self.flow_box.get_children():
+                    self.flow_box.remove(child)
+            except Exception as e:
+                logger.debug(f"Error clearing children: {e}")
 
-        self.window_buttons.clear()
+            self.window_buttons.clear()
 
-        # Get user windows
-        self.windows_list = self.get_user_windows()
+            # Get user windows with comprehensive error handling
+            try:
+                self.windows_list = self.get_user_windows()
+            except Exception as e:
+                logger.error(f"Error getting user windows: {e}")
+                self.windows_list = []
 
-        if not self.windows_list:
-            # Show message if no windows found
-            label = Gtk.Label()
-            label.set_markup("<span size='large'>No active windows found</span>")
-            label.set_halign(Gtk.Align.CENTER)
-            self.flow_box.add(label)
-        else:
-            # Calculate dynamic dimensions based on window count
-            window_count = len(self.windows_list)
-            nrows, ncols = self.calculate_layout_dimensions(window_count)
-
-            # Update flow box configuration with calculated dimensions
-            self.flow_box.set_min_children_per_line(ncols)
-            self.flow_box.set_max_children_per_line(ncols)
-
-            # Update scroll window configuration based on layout
-            if nrows == 1 and ncols > 1:
-                # Single row layout: enable horizontal scrolling, disable vertical
-                self.scroll_window.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
-
-                # Calculate required width for all columns
-                thumbnail_width = self.config['xsize']
-                spacing = 10  # column spacing
-                margin = 30   # window margins
-                required_width = ncols * thumbnail_width + (ncols - 1) * spacing + margin
-
-                # Set minimum width to ensure all columns are visible
-                self.scroll_window.set_min_content_width(required_width)
-
-                # Also set the main window to be wide enough
-                self.window.set_default_size(required_width + 100, -1)  # +100 for window decorations
+            if not self.windows_list:
+                # Show message if no windows found
+                try:
+                    label = Gtk.Label()
+                    label.set_markup("<span size='large'>No active windows found</span>")
+                    label.set_halign(Gtk.Align.CENTER)
+                    self.flow_box.add(label)
+                except Exception as e:
+                    logger.debug(f"Error showing no windows message: {e}")
             else:
-                # Multi-row layout: enable vertical scrolling, disable horizontal
-                self.scroll_window.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                # Calculate dynamic dimensions based on window count
+                window_count = len(self.windows_list)
+                nrows, ncols = self.calculate_layout_dimensions(window_count)
 
-            # Create thumbnail buttons for each window
-            for window_info in self.windows_list:
-                thumbnail = self.create_window_thumbnail(window_info)
-                self.window_buttons.append(thumbnail)
-                self.flow_box.add(thumbnail)
+                # Update flow box configuration with calculated dimensions
+                try:
+                    self.flow_box.set_min_children_per_line(ncols)
+                    self.flow_box.set_max_children_per_line(ncols)
+                except Exception as e:
+                    logger.debug(f"Error setting flow box dimensions: {e}")
 
-        self.flow_box.show_all()
+                # Update scroll window configuration based on layout
+                if nrows == 1 and ncols > 1:
+                    # Single row layout: enable horizontal scrolling, disable vertical
+                    try:
+                        self.scroll_window.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+
+                        # Calculate required width for all columns
+                        thumbnail_width = self.config['xsize']
+                        spacing = 10  # column spacing
+                        margin = 30   # window margins
+                        required_width = ncols * thumbnail_width + (ncols - 1) * spacing + margin
+
+                        # Set minimum width to ensure all columns are visible
+                        self.scroll_window.set_min_content_width(required_width)
+
+                        # Also set the main window to be wide enough
+                        self.window.set_default_size(required_width + 100, -1)
+                    except Exception as e:
+                        logger.debug(f"Error setting scroll configuration: {e}")
+                else:
+                    # Multi-row layout: enable vertical scrolling, disable horizontal
+                    try:
+                        self.scroll_window.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                    except Exception as e:
+                        logger.debug(f"Error setting scroll policy: {e}")
+
+                # Create thumbnail buttons for each window
+                for window_info in self.windows_list:
+                    try:
+                        thumbnail = self.create_window_thumbnail(window_info)
+                        self.window_buttons.append(thumbnail)
+                        self.flow_box.add(thumbnail)
+                    except Exception as e:
+                        logger.debug(f"Error creating thumbnail: {e}")
+                        continue
+
+            try:
+                self.flow_box.show_all()
+            except Exception as e:
+                logger.debug(f"Error showing flow box: {e}")
+
+        except Exception as e:
+            logger.error(f"Error in populate_windows: {e}")
 
     def show_window(self):
         """Show the window switcher"""
@@ -953,7 +1172,7 @@ class OtterWindowSwitcher:
             # The window will be hidden when mouse leaves (respecting --delay)
             self.window_clicked = True
         except Exception as e:
-            print(f"Error activating window: {e}")
+            logger.error(f"Error activating window: {e}")
 
     def grab_keyboard_focus(self):
         """Ensure window has keyboard focus"""
@@ -1036,7 +1255,7 @@ class OtterWindowSwitcher:
                         return True
 
         except Exception as e:
-            print(f"Error in scroll event: {e}")
+            logger.error(f"Error in scroll event: {e}")
 
         return False  # Event not handled
 
@@ -1089,7 +1308,7 @@ class OtterWindowSwitcher:
                         y < window_y - buffer or y > window_y + window_height + buffer):
                         self.hide_window()
             except Exception as e:
-                print(f"Error in delayed_hide: {e}")
+                logger.error(f"Error in delayed_hide: {e}")
 
         return False  # Don't repeat
 
@@ -1189,7 +1408,7 @@ class OtterWindowSwitcher:
             )
 
         except Exception as e:
-            print(f"Error moving app to current display: {e}")
+            logger.error(f"Error moving app to current display: {e}")
             
 
     # Fix 2: Fix WindowMoveResizeMask attribute error
@@ -1215,14 +1434,14 @@ class OtterWindowSwitcher:
             )
 
         except Exception as e:
-            print(f"Error resizing app to current display: {e}")
+            logger.error(f"Error resizing app to current display: {e}")
 
     def on_minimize_app(self, menu_item, window):
         """Minimize the application"""
         try:
             window.minimize()
         except Exception as e:
-            print(f"Error minimizing app: {e}")
+            logger.error(f"Error minimizing app: {e}")
 
     def on_maximize_app(self, menu_item, window):
         """Maximize the application"""
@@ -1232,7 +1451,7 @@ class OtterWindowSwitcher:
             else:
                 window.maximize()
         except Exception as e:
-            print(f"Error maximizing app: {e}")
+            logger.error(f"Error maximizing app: {e}")
 
     def on_switch_to_app(self, menu_item, window):
         """Switch to the application's workspace and display"""
@@ -1246,91 +1465,122 @@ class OtterWindowSwitcher:
             window.activate(Gtk.get_current_event_time())
 
         except Exception as e:
-            print(f"Error switching to app: {e}")
+            logger.error(f"Error switching to app: {e}")
 
     def on_move_to_workspace(self, menu_item, window, workspace):
         """Move the application to the specified workspace"""
         try:
             window.move_to_workspace(workspace)
         except Exception as e:
-            print(f"Error moving app to workspace: {e}")
+            logger.error(f"Error moving app to workspace: {e}")
 
 
-    # Replace the on_drag_app method:
     def on_drag_app(self, menu_item, window):
         """Start drag mode - position cursor on title bar."""
         try:
             # Get window geometry
             geometry = window.get_geometry()
-            
+
             # Position cursor on title bar (top center of window)
             title_bar_x = geometry.x + geometry.width // 2
             title_bar_y = geometry.y + 15  # Approximate title bar height
-            
+
             # Warp cursor to title bar
             display = Gdk.Display.get_default()
             seat = display.get_default_seat()
             pointer = seat.get_pointer()
             pointer.warp(display.get_default_screen(), title_bar_x, title_bar_y)
-            
+
             # Set drag mode
             self.drag_window = window
             self.drag_active = True
-            
-            # Connect click handler to end drag
-            self.window.connect("button-press-event", self.on_drag_click)
-            
+
+            # Only connect signal if not already connected
+            if not self.drag_signal_id:
+                self.drag_signal_id = self.window.connect("button-press-event", self.on_drag_click)
+
         except Exception as e:
-            print(f"Error starting drag mode: {e}")
+            logger.error(f"Error starting drag mode: {e}")
         
     def on_drag_click(self, widget, event):
         """Stop drag mode when clicked"""
-        if hasattr(self, 'drag_active') and self.drag_active:
+        if self.drag_active:
             self.drag_active = False
             self.drag_window = None
+            # Disconnect the signal
+            if self.drag_signal_id:
+                self.window.disconnect(self.drag_signal_id)
+                self.drag_signal_id = None
             return True
         return False
 
 
-    # Fix 6: Update the cleanup method to clear last valid screenshots
     def cleanup(self):
-        """Clean up resources."""
+        """Clean up resources thoroughly."""
+        logger.info("Cleaning up resources...")
+
+        # Remove all GLib timeout handlers
         if self.monitor_id:
-            GLib.source_remove(self.monitor_id)
+            try:
+                GLib.source_remove(self.monitor_id)
+            except Exception as e:
+                logger.debug(f"Error removing monitor: {e}")
             self.monitor_id = None
 
         if self.screenshot_monitor_id:
-            GLib.source_remove(self.screenshot_monitor_id)
+            try:
+                GLib.source_remove(self.screenshot_monitor_id)
+            except Exception as e:
+                logger.debug(f"Error removing screenshot monitor: {e}")
             self.screenshot_monitor_id = None
 
-        # Clear caches
-        self.screenshot_cache.clear()
-        if hasattr(self, 'last_valid_screenshots'):
-            self.last_valid_screenshots.clear()
+        if self.delayed_hide_id:
+            try:
+                GLib.source_remove(self.delayed_hide_id)
+            except Exception as e:
+                logger.debug(f"Error removing delayed hide: {e}")
+            self.delayed_hide_id = None
+
+        # Disconnect all signals
+        if self.drag_signal_id and self.window:
+            try:
+                self.window.disconnect(self.drag_signal_id)
+            except Exception as e:
+                logger.debug(f"Error disconnecting drag signal: {e}")
+            self.drag_signal_id = None
+
+        # Clear window references
+        self.drag_active = False
+        self.drag_window = None
+
+        # Clear caches and release Pixbuf references
+        try:
+            self.screenshot_cache.clear()
+        except Exception as e:
+            logger.debug(f"Error clearing screenshot cache: {e}")
+
+        try:
+            if hasattr(self, 'last_valid_screenshots'):
+                self.last_valid_screenshots.clear()
+        except Exception as e:
+            logger.debug(f"Error clearing valid screenshots: {e}")
+
+        try:
+            if hasattr(self, 'window_buttons'):
+                self.window_buttons.clear()
+        except Exception as e:
+            logger.debug(f"Error clearing window buttons: {e}")
+
+        logger.info("Cleanup complete")
 
     def run(self):
         """Run the application"""
         try:
             Gtk.main()
         except KeyboardInterrupt:
-            print("\nReceived interrupt signal, shutting down...")
+            logger.info("Received interrupt signal, shutting down...")
             self.cleanup()
             sys.exit(0)
-
-
-    def get_default_config(self):
-        """Get default configuration"""
-        return {
-            'nrows': None,  # Will be calculated based on window count
-            'ncols': 4,     # Default to 4 columns (can be None when nrows is specified)
-            'xsize': 160,
-            'show_title': True,  # Show the fancy title bar
-            'hide_delay': 0,     # Delay in milliseconds before hiding (default: 0)
-            'north': False,  # Changed from True - will be set by argument parser
-            'south': False,
-            'east': False,
-            'west': False
-        }
         
 
 
@@ -1405,27 +1655,29 @@ def main():
     # Parse command line arguments
     args = parse_arguments()
 
-    print(f"Starting Otter Window Switcher...")
+    logger.info("Starting Otter Window Switcher...")
 
     # Show configuration based on what was specified
     if args.nrows is not None:
-        print(f"Configuration: {args.nrows} rows (auto-calculated columns), {args.xsize}px width")
+        logger.info(f"Configuration: {args.nrows} rows (auto-calculated columns), {args.xsize}px width")
     else:
-        print(f"Configuration: {args.ncols} columns (auto-calculated rows), {args.xsize}px width")
+        logger.info(f"Configuration: {args.ncols} columns (auto-calculated rows), {args.xsize}px width")
 
     if args.notitle:
-        print("Title bar: Disabled (--notitle)")
+        logger.info("Title bar: Disabled (--notitle)")
     else:
-        print("Title bar: Enabled (fancy title bar with otter emoji)")
+        logger.info("Title bar: Enabled")
 
     if args.delay > 0:
-        print(f"Hide delay: {args.delay}ms")
+        logger.info(f"Hide delay: {args.delay}ms")
     else:
-        print("Hide delay: Immediate (0ms)")
+        logger.info("Hide delay: Immediate (0ms)")
+
+    logger.info(f"Edge trigger: {'North' if args.north else 'South' if args.south else 'East' if args.east else 'West'}")
 
     # Handle signals for clean shutdown
     def signal_handler(signum, frame):
-        print(f"\nReceived signal {signum}, shutting down...")
+        logger.info(f"Received signal {signum}, shutting down...")
         Gtk.main_quit()
         sys.exit(0)
 
@@ -1433,8 +1685,12 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     # Create and run the application with configuration
-    app = OtterWindowSwitcher(args)
-    app.run()
+    try:
+        app = OtterWindowSwitcher(args)
+        app.run()
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
