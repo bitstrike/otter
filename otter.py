@@ -770,12 +770,19 @@ class OtterWindowSwitcher:
                         except Exception:
                             icon = None
 
+                        # Get XID once and cache it to avoid calling get_xid() on potentially stale objects
+                        try:
+                            xid = window.get_xid()
+                        except Exception:
+                            xid = None
+
                         windows.append({
                             'window': window,
                             'name': window_name,
                             'app_name': app_name,
                             'icon': icon,
-                            'is_minimized': is_minimized
+                            'is_minimized': is_minimized,
+                            'xid': xid  # Cache XID for MRU sorting
                         })
 
                 except Exception as e:
@@ -794,7 +801,14 @@ class OtterWindowSwitcher:
             # Then, stable sort by MRU timestamp (most recent first)
             # Windows with no timestamp get timestamp 0 (appear at the end)
             try:
-                windows.sort(key=lambda w: self.mru_timestamps.get(w['window'].get_xid(), 0), reverse=True)
+                def safe_get_timestamp(w):
+                    """Safely get MRU timestamp for a window using cached XID"""
+                    xid = w.get('xid')
+                    if xid is not None:
+                        return self.mru_timestamps.get(xid, 0)
+                    return 0  # Windows without XID get lowest priority
+
+                windows.sort(key=safe_get_timestamp, reverse=True)
             except Exception as e:
                 logger.debug(f"Error applying MRU sort: {e}")
 
@@ -1348,7 +1362,8 @@ class OtterWindowSwitcher:
         """Handle window open/close events"""
         if self.is_visible:
             # Refresh the window list if switcher is visible
-            self.populate_windows()
+            # Use idle_add to avoid reentrancy issues with Wnck callbacks
+            GLib.idle_add(self.populate_windows)
 
     def on_destroy(self, widget):
         """Handle window destruction"""
