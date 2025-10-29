@@ -117,7 +117,8 @@ class OtterWindowSwitcher:
                 'south': args.south,
                 'east': args.east,
                 'west': args.west,
-                'recent': args.recent
+                'recent': args.recent,
+                'main_character': args.main_character
             }
         else:
             self.config = self.get_default_config()
@@ -160,6 +161,11 @@ class OtterWindowSwitcher:
         # Dictionary mapping window XID to timestamp of last activation
         self.mru_timestamps = {}
 
+        # Wnck health tracking
+        self.wnck_last_recreation = time.time()
+        self.wnck_recreation_interval = 3600  # Recreate Wnck screen every hour
+        self.wnck_call_count = 0
+
         # Monitoring IDs
         self.monitor_id = None
         self.screenshot_monitor_id = None
@@ -193,7 +199,8 @@ class OtterWindowSwitcher:
             'south': False,
             'east': False,
             'west': False,
-            'recent': False  # Most recently used ordering
+            'recent': False,  # Most recently used ordering
+            'main_character': False  # Respect fullscreen apps
         }
 
     def calculate_layout_dimensions(self, window_count):
@@ -246,6 +253,10 @@ class OtterWindowSwitcher:
             
             # Only check for edge trigger when window is NOT visible
             if not self.is_visible:
+                # Check if --main-character is enabled and active window is fullscreen
+                if self.config.get('main_character') and self.is_active_window_fullscreen():
+                    return True  # Continue monitoring but don't trigger (respect the main character!)
+
                 # Check if mouse is at the specified edge of the screen
                 if self.config.get('north'):
                     # North edge (top)
@@ -714,6 +725,13 @@ class OtterWindowSwitcher:
         if not self.screen_wnck:
             return windows
 
+        # Periodically recreate Wnck screen to prevent corruption
+        if self.should_recreate_wnck():
+            self.recreate_wnck_screen()
+
+        # Track Wnck usage
+        self.wnck_call_count += 1
+
         try:
             # CRITICAL: Force Wnck to update its internal state before querying
             # This prevents accessing stale/corrupted WnckClassGroup objects
@@ -1091,6 +1109,72 @@ class OtterWindowSwitcher:
 
         except Exception as e:
             logger.error(f"Error in populate_windows: {e}")
+
+    def recreate_wnck_screen(self):
+        """Recreate the Wnck screen object to prevent corruption"""
+        if not WNCK_AVAILABLE:
+            return False
+
+        try:
+            logger.info("Recreating Wnck screen object...")
+            old_screen = self.screen_wnck
+
+            # Create new screen
+            self.screen_wnck = Wnck.Screen.get_default()
+            self.screen_wnck.force_update()
+
+            # Reconnect signals to new screen
+            if old_screen:
+                try:
+                    # Disconnect old signals (if possible)
+                    pass  # GObject handles this automatically
+                except:
+                    pass
+
+            self.screen_wnck.connect("window-opened", self.on_window_changed)
+            self.screen_wnck.connect("window-closed", self.on_window_changed)
+
+            self.wnck_last_recreation = time.time()
+            self.wnck_call_count = 0
+            logger.info("Wnck screen recreated successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to recreate Wnck screen: {e}")
+            return False
+
+    def should_recreate_wnck(self) -> bool:
+        """Check if we should recreate the Wnck screen object"""
+        # Recreate every hour as preventive maintenance
+        if time.time() - self.wnck_last_recreation > self.wnck_recreation_interval:
+            logger.info(f"Wnck screen object is {self.wnck_recreation_interval}s old, recreating...")
+            return True
+
+        # Recreate after many calls (potential memory fragmentation)
+        if self.wnck_call_count > 10000:
+            logger.info(f"Wnck has been called {self.wnck_call_count} times, recreating...")
+            return True
+
+        return False
+
+    def is_active_window_fullscreen(self) -> bool:
+        """Check if the currently active window is fullscreen"""
+        if not self.screen_wnck:
+            return False
+
+        try:
+            # Get the active window
+            active_window = self.screen_wnck.get_active_window()
+            if not active_window:
+                return False
+
+            # Check if window is fullscreen
+            return active_window.is_fullscreen()
+
+        except Exception as e:
+            # If we can't determine, assume not fullscreen to be safe
+            logger.debug(f"Error checking fullscreen status: {e}")
+            return False
 
     def show_window(self):
         """Show the window switcher"""
@@ -1672,6 +1756,9 @@ Examples:
 
     parser.add_argument('--recent', action='store_true',
                         help='Order thumbnails by most recently used (MRU), with recently selected windows appearing first')
+
+    parser.add_argument('--main-character', action='store_true',
+                        help='Disable edge trigger when a fullscreen app is active (prevents interrupting games/videos)')
 
     # Add mutually exclusive group for screen edges
     edge_group = parser.add_mutually_exclusive_group()
