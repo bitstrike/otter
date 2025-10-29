@@ -5,33 +5,3 @@ Create an application named otter.py for the ubuntu cinnamon desktop that pops-u
 * the mouse wheel, when activated in the list window, will scroll the list so if there are many applications running, they can all be viewed as a scrollable list
 * if the ESCAPE key is pressed, or the mouse is moved off the otter window area the application should end until the mouse is moved to y0 again
 * The interface should resemble the task switcher in Ubuntu cinnamon desktop (when ALT+TAB is pressed)
-
-
-$ python3 otter.py  --nrows 1 --notitle --xsize 150 
-
-(otter.py:512638): dbind-WARNING **: 03:49:01.474: Couldn't connect to accessibility bus: Failed to connect to socket /home/game/.cache/at-spi/bus_0: Permission denied
-Starting Otter Window Switcher...
-Configuration: 1 rows (auto-calculated columns), 150px width
-Title bar: Disabled (--notitle)
-Hide delay: Immediate (0ms)
-
-$ python3 otter.py  --nrows 1 --notitle --xsize 150 --east                                                                                                                                                                                
-                                                                                                                                                                                                                                          
-(otter.py:344461): dbind-WARNING **: 19:20:20.250: Couldn't connect to accessibility bus: Failed to connect to socket /home/game/.cache/at-spi/bus_0: Permission denied                                                                   
-Starting Otter Window Switcher...                                                                                                                                                                                                         
-Configuration: 1 rows (auto-calculated columns), 150px width                                                                                                                                                                              
-Title bar: Disabled (--notitle)                           
-Hide delay: Immediate (0ms)                               
-/home/src/otter/otter.py:760: Warning: invalid unclassed pointer in cast to 'WnckClassGroup'
-  self.windows_list = self.get_user_windows()
-Segmentation fault (core dumped)
-
-
-$ python3 otter.py  --nrows 1 --notitle --xsize 150 --east                                                                                                                                                                                
-Starting Otter Window Switcher...                                                                                                                                                                                                         
-Configuration: 1 rows (auto-calculated columns), 150px width                                                                                                                                                                              
-Title bar: Disabled (--notitle)                                                                                                                                                                                                           
-Hide delay: Immediate (0ms)                                                                                                                                                                                                               
-Error resizing app to current display: type object 'WindowMoveResizeMask' has no attribute 'MOVE'                                                                                                                                         
-Error moving app to current display: 'Window' object has no attribute 'move'                                                                                                                                                              
-Segmentation fault (core dumped)     
