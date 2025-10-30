@@ -615,38 +615,38 @@ class OtterWindowSwitcher:
         main_box.set_margin_top(15)
         main_box.set_margin_bottom(15)
 
-        # Style the window with dark theme
+        # Style the window using system theme colors
         css_provider = Gtk.CssProvider()
         css_provider.load_from_data(b"""
             window {
-                background-color: rgba(46, 52, 64, 0.95);
+                background-color: alpha(@theme_bg_color, 0.95);
                 border-radius: 10px;
-                border: 2px solid rgba(129, 161, 193, 0.8);
+                border: 2px solid @borders;
             }
             .title-bar {
-                background: linear-gradient(135deg, rgba(129, 161, 193, 0.3), rgba(88, 166, 255, 0.2));
+                background: @theme_bg_color;
                 border-radius: 8px;
                 padding: 8px;
                 margin-bottom: 10px;
-                border: 1px solid rgba(129, 161, 193, 0.5);
+                border: 1px solid @borders;
             }
             .window-button {
-                background-color: rgba(67, 76, 94, 0.8);
+                background-color: alpha(@theme_base_color, 0.9);
                 border-radius: 8px;
-                border: 1px solid rgba(129, 161, 193, 0.5);
+                border: 1px solid @borders;
                 padding: 8px;
                 margin: 4px;
             }
             .minimized-window-button {
                 opacity: 0.6;
-                border: 1px solid rgba(255, 0, 0, 0.5);
+                border: 2px solid @warning_color;
             }
             .window-button:hover {
-                background-color: rgba(129, 161, 193, 0.3);
-                border: 1px solid rgba(129, 161, 193, 0.8);
+                background-color: alpha(@theme_selected_bg_color, 0.5);
+                border: 2px solid @theme_selected_bg_color;
             }
             label {
-                color: #eceff4;
+                color: @theme_fg_color;
             }
             """)
         
