@@ -1682,6 +1682,15 @@ class OtterWindowSwitcher:
             else:
                 logger.warning(f"Window {window.get_name()} has no workspace")
 
+            # Record MRU timestamp if --recent flag is enabled
+            if self.config.get('recent', False):
+                try:
+                    xid = window.get_xid()
+                    self.mru_timestamps[xid] = time.time()
+                    logger.debug(f"Updated MRU timestamp for window XID {xid} (workspace switch)")
+                except Exception as e:
+                    logger.debug(f"Could not update MRU timestamp: {e}")
+
         except Exception as e:
             logger.error(f"Error switching to app workspace: {e}")
 
