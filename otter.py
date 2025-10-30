@@ -1483,10 +1483,14 @@ class OtterWindowSwitcher:
         Gtk.main_quit()
 
     def on_button_press_event(self, button, event, window):
-        """Handle button press events for context menu"""
-        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:  # Right-click
-            self.show_context_menu(button, window)
-            return True
+        """Handle button press events for context menu and middle-click"""
+        if event.type == Gdk.EventType.BUTTON_PRESS:
+            if event.button == 2:  # Middle-click
+                self.on_switch_to_app_workspace(None, window)
+                return True
+            elif event.button == 3:  # Right-click
+                self.show_context_menu(button, window)
+                return True
         return False
 
     def show_context_menu(self, widget, window):
@@ -1499,6 +1503,7 @@ class OtterWindowSwitcher:
         minimize_item = Gtk.MenuItem(label="Minimize app")
         maximize_item = Gtk.MenuItem(label="Maximize app")
         switch_to_item = Gtk.MenuItem(label="Switch to app")
+        switch_to_workspace_item = Gtk.MenuItem(label="Go to app's workspace")
         move_to_workspace_item = Gtk.MenuItem(label="Move to workspace")
 
         # Create submenu for workspaces
@@ -1519,6 +1524,7 @@ class OtterWindowSwitcher:
         minimize_item.connect("activate", self.on_minimize_app, window)
         maximize_item.connect("activate", self.on_maximize_app, window)
         switch_to_item.connect("activate", self.on_switch_to_app, window)
+        switch_to_workspace_item.connect("activate", self.on_switch_to_app_workspace, window)
 
         # drag application
         drag_app_item = Gtk.MenuItem(label="Drag app")
@@ -1530,6 +1536,7 @@ class OtterWindowSwitcher:
         menu.append(minimize_item)
         menu.append(maximize_item)
         menu.append(switch_to_item)
+        menu.append(switch_to_workspace_item)
         menu.append(move_to_workspace_item)
         menu.append(drag_app_item)
 
@@ -1634,6 +1641,20 @@ class OtterWindowSwitcher:
 
         except Exception as e:
             logger.error(f"Error switching to app: {e}")
+
+    def on_switch_to_app_workspace(self, menu_item, window):
+        """Switch to the application's workspace without activating the window"""
+        try:
+            # Only activate the window's workspace (don't bring window forward)
+            workspace = window.get_workspace()
+            if workspace:
+                workspace.activate(Gtk.get_current_event_time())
+                logger.info(f"Switched to workspace containing {window.get_name()}")
+            else:
+                logger.warning(f"Window {window.get_name()} has no workspace")
+
+        except Exception as e:
+            logger.error(f"Error switching to app workspace: {e}")
 
     def on_move_to_workspace(self, menu_item, window, workspace):
         """Move the application to the specified workspace"""
