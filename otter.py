@@ -146,6 +146,7 @@ class OtterWindowSwitcher:
         self.window = None
         self.is_visible = False
         self.window_clicked = False
+        self.HIDE_STATE = True  # Semaphore: True = window can hide, False = window cannot hide
 
         # Drag mode state - initialize here to avoid AttributeError
         self.drag_active = False
@@ -1295,6 +1296,11 @@ class OtterWindowSwitcher:
 
     def hide_window(self):
         """Hide the window switcher with configurable delay"""
+        # Check HIDE_STATE semaphore
+        if not self.HIDE_STATE:
+            logger.debug("hide_window: HIDE_STATE is False, not hiding")
+            return
+
         if self.is_visible and self.window:
             if self.config['hide_delay'] > 0:
                 # Use configurable delay
@@ -1305,6 +1311,11 @@ class OtterWindowSwitcher:
 
     def _do_hide(self):
         """Actually hide the window (called after delay if configured)"""
+        # Check HIDE_STATE semaphore
+        if not self.HIDE_STATE:
+            logger.debug("_do_hide: HIDE_STATE is False, not hiding")
+            return False
+
         if self.window:
             self.window.hide()
             self.is_visible = False
@@ -1445,6 +1456,11 @@ class OtterWindowSwitcher:
 
     def delayed_hide(self):
         """Hide window after a delay if mouse is not over it"""
+        # Check HIDE_STATE semaphore first
+        if not self.HIDE_STATE:
+            logger.debug("delayed_hide: HIDE_STATE is False, not hiding")
+            return False
+
         if self.is_visible and self.window:
             try:
                 # Check if mouse is still over the window
@@ -1497,6 +1513,14 @@ class OtterWindowSwitcher:
         """Show context menu for window operations"""
         menu = Gtk.Menu()
 
+        # Set HIDE_STATE semaphore to False to prevent window from hiding while menu is open
+        self.HIDE_STATE = False
+        logger.debug("Context menu opened, HIDE_STATE set to False")
+
+        # Connect to menu hide/destroy events to restore HIDE_STATE
+        menu.connect("hide", self.on_context_menu_closed)
+        menu.connect("destroy", self.on_context_menu_closed)
+
         # Create menu items
         move_to_display_item = Gtk.MenuItem(label="Move app to current display")
         resize_to_display_item = Gtk.MenuItem(label="Resize app to current display")
@@ -1544,6 +1568,11 @@ class OtterWindowSwitcher:
         menu.show_all()
         menu.popup_at_pointer(None)  # Show the menu at the current pointer position
 
+    def on_context_menu_closed(self, menu):
+        """Called when context menu is closed"""
+        # Restore HIDE_STATE semaphore to True when menu closes
+        self.HIDE_STATE = True
+        logger.debug("Context menu closed, HIDE_STATE set to True")
 
     # Replace the on_move_to_display method:
     def on_move_to_display(self, menu_item, window):
