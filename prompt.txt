@@ -1,7 +1,0 @@
-Create an application named otter.py for the ubuntu cinnamon desktop that pops-up a list or group of active X applications running in the current X session for the user to select with the mouse click.
-* otter will run in the background and only present it's interface with the mouse cursor is moved to y0
-* Only user applications should be listed and not system application
-* the list or group of applications will be presented as thumbnailed images to click on
-* the mouse wheel, when activated in the list window, will scroll the list so if there are many applications running, they can all be viewed as a scrollable list
-* if the ESCAPE key is pressed, or the mouse is moved off the otter window area the application should end until the mouse is moved to y0 again
-* The interface should resemble the task switcher in Ubuntu cinnamon desktop (when ALT+TAB is pressed)

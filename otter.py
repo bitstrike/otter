@@ -165,6 +165,8 @@ class OtterWindowSwitcher:
         self.wnck_last_recreation = time.time()
         self.wnck_recreation_interval = 3600  # Recreate Wnck screen every hour
         self.wnck_call_count = 0
+        self.wnck_just_recreated = False  # Flag to skip immediate force_update after recreation
+        self.wnck_recreating = False  # Lock flag to prevent concurrent Wnck access during recreation
 
         # Monitoring IDs
         self.monitor_id = None
@@ -725,6 +727,11 @@ class OtterWindowSwitcher:
         if not self.screen_wnck:
             return windows
 
+        # If recreation is in progress, return empty list (don't touch Wnck)
+        if self.wnck_recreating:
+            logger.debug("Wnck recreation in progress, skipping query")
+            return windows
+
         # Periodically recreate Wnck screen to prevent corruption
         if self.should_recreate_wnck():
             self.recreate_wnck_screen()
@@ -735,7 +742,12 @@ class OtterWindowSwitcher:
         try:
             # CRITICAL: Force Wnck to update its internal state before querying
             # This prevents accessing stale/corrupted WnckClassGroup objects
-            self.screen_wnck.force_update()
+            # EXCEPT right after recreation - let it initialize naturally first
+            if self.wnck_just_recreated:
+                logger.debug("Skipping force_update immediately after recreation")
+                self.wnck_just_recreated = False  # Reset flag
+            else:
+                self.screen_wnck.force_update()
 
             # Get all windows from Wnck
             window_list = self.screen_wnck.get_windows()
@@ -1116,31 +1128,47 @@ class OtterWindowSwitcher:
             return False
 
         try:
+            # Set lock to prevent other code from touching Wnck during recreation
+            self.wnck_recreating = True
             logger.info("Recreating Wnck screen object...")
-            old_screen = self.screen_wnck
 
-            # Create new screen
-            self.screen_wnck = Wnck.Screen.get_default()
-            self.screen_wnck.force_update()
-
-            # Reconnect signals to new screen
-            if old_screen:
+            # Disconnect signals from old screen first
+            if self.screen_wnck:
                 try:
-                    # Disconnect old signals (if possible)
-                    pass  # GObject handles this automatically
+                    # Try to disconnect all handlers (best effort)
+                    GLib.signal_handlers_destroy(self.screen_wnck)
                 except:
                     pass
 
+            # Longer delay to let old screen settle and any pending events clear
+            time.sleep(0.2)
+
+            # Create new screen
+            self.screen_wnck = Wnck.Screen.get_default()
+
+            # DON'T call force_update immediately after creation
+            # Let it initialize naturally first
+
+            # Reconnect signals to new screen
             self.screen_wnck.connect("window-opened", self.on_window_changed)
             self.screen_wnck.connect("window-closed", self.on_window_changed)
 
             self.wnck_last_recreation = time.time()
             self.wnck_call_count = 0
+            self.wnck_just_recreated = True  # Skip immediate force_update
+
+            # Longer delay before returning to let Wnck settle completely
+            time.sleep(0.2)
+
+            # Clear lock
+            self.wnck_recreating = False
+
             logger.info("Wnck screen recreated successfully")
             return True
 
         except Exception as e:
             logger.error(f"Failed to recreate Wnck screen: {e}")
+            self.wnck_recreating = False  # Clear lock even on failure
             return False
 
     def should_recreate_wnck(self) -> bool:

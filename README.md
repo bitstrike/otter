@@ -41,14 +41,32 @@ A handy mouse-activated window switcher for GTK-based Linux desktop environments
 
 ## Requirements
 
-### System Dependencies (Ubuntu/Debian)
+### Python Version
+- Python 3.6 or higher (for f-strings and type hints)
+
+### System Dependencies
+
+**Ubuntu/Debian:**
 ```bash
 sudo apt-get install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-wnck-3.0
 ```
 
-### Other Distributions
-- **Fedora/RHEL**: `sudo dnf install python3-gobject gtk3-devel libwnck3-devel`
-- **Arch Linux**: `sudo pacman -S python-gobject gtk3 libwnck3`
+**Fedora/RHEL:**
+```bash
+sudo dnf install python3-gobject gtk3-devel libwnck3-devel
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S python-gobject gtk3 libwnck3
+```
+
+**Verify Installation:**
+```bash
+python3 -c "import gi; gi.require_version('Gtk', '3.0'); gi.require_version('Wnck', '3.0'); from gi.repository import Gtk, Wnck; print('✓ All dependencies installed')"
+```
+
+**Note:** All Python modules used are from the standard library. No pip packages required!
 
 ## Installation
 
