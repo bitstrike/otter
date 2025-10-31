@@ -1,38 +1,25 @@
 # Otter Window Switcher
 
-A handy mouse-activated window switcher for GTK-based Linux desktop environments. Built with Python, GTK3, and Wnck.
+A handy mouse-activated window switcher for GTK-based Linux desktop environments. Built with Claude, Python, GTK3, and Wnck.
 
 ![otter in action](otter.png)
 
 ## Features
 
-### Functionality
-- **Mouse-activated**: Move your mouse to any screen edge (north/south/east/west) to activate
-- **Multi-monitor support**: Works across multiple monitors, appearing on the monitor where your cursor is located
-- **Smart positioning**: Window appears near your mouse cursor with intelligent edge detection
-- **Context menu**: Right-click on thumbnails for window operations (move, resize, minimize, maximize, workspace management)
-- **Middle-click**: Middle-click on thumbnails to switch to the app's workspace without activating the window
-- **Drag mode**: Drag windows by moving them with your mouse cursor
-- **MRU ordering**: Most Recently Used sorting keeps frequently accessed windows at the front
-- **Fullscreen respect**: Optional mode that won't trigger during fullscreen games/videos (--main-character)
-- **High-quality thumbnails**: Shows previews of open windows with periodic caching for performance
-- **Mouse wheel scrolling**: Scroll through windows with vertical/horizontal mouse wheel
-- **Auto-hide**: Automatically hides when mouse moves away
-- **Minimized windows**: Shows all windows including minimized ones (with visual distinction)
-- **Multi-workspace support**: Move windows between workspaces, switch to window locations
-- **Window operations**: Minimize, maximize, move to display, resize to display
-- **System filtering**: Only shows user applications, not system windows
-- **GTK theme integration**: Automatically follows your system GTK theme colors for a consistent, native appearance
+Otter is a mouse-activated window switcher that appears when you move your cursor to any screen edge. It displays high-quality thumbnails of all open windows with intelligent multi-monitor positioning and GTK theme integration for a native appearance. Windows can be selected with a click, or managed through a context menu (right-click) offering operations like move, resize, minimize, maximize, and workspace management. Middle-clicking switches to a window's workspace without activation. The switcher supports MRU (Most Recently Used) ordering to keep frequently accessed windows at the front, respects fullscreen applications to avoid interrupting games or videos, and includes features like drag mode, mouse wheel scrolling, and auto-hide. It intelligently filters system windows, shows minimized windows with visual distinction, and handles multiple workspaces seamlessly across all connected monitors.
 
-### Technical Features
-- **Edge-aware positioning**: Automatically adjusts position when near monitor edges
-- **Race condition handling**: Properly handles timing between thumbnail generation and window positioning
-- **Flickering prevention**: Cooldown mechanism prevents window flickering
-- **Defensive programming**: Comprehensive error handling for long-term stability
-- **Wnck state management**: Periodic screen object recreation prevents memory corruption
-- **Logging system**: Production-ready logging for debugging and monitoring
 
 ## Requirements
+
+### Display Server
+**X11 Only** - Otter requires X11 and does not support Wayland. Wnck (Window Navigator Construction Kit) relies on X11 window management protocols.
+
+**Check your display server:**
+```bash
+echo $XDG_SESSION_TYPE
+# Should output: x11
+# If it outputs: wayland - Otter will not work
+```
 
 ### Python Version
 - Python 3.6 or higher
@@ -44,16 +31,6 @@ A handy mouse-activated window switcher for GTK-based Linux desktop environments
 - `python3-gi-cairo`
 - `gir1.2-gtk-3.0`
 - `gir1.2-wnck-3.0`
-
-**Fedora/RHEL:**
-- `python3-gobject`
-- `gtk3-devel`
-- `libwnck3-devel`
-
-**Arch Linux:**
-- `python-gobject`
-- `gtk3`
-- `libwnck3`
 
 **Note:** All Python modules are from the standard library or system GObject Introspection bindings. No pip packages required! Using pip for GTK/Wnck is not recommended and may cause issues - use your system package manager instead.
 
@@ -134,23 +111,10 @@ The application runs in the background. To activate:
 - `--delay` may cause minor visual flickering on hide
 - `--main-character` prevents interrupting games like Minecraft when in fullscreen
 
-## Context Menu Features
-
-Right-click on any window thumbnail to access:
-
-- **Move to Current Display**: Move window to the monitor where your cursor is
-- **Resize to Current Display**: Resize window to fit the current monitor
-- **Minimize**: Minimize the window
-- **Maximize**: Maximize the window
-- **Switch to App**: Jump to the window's workspace/display and activate it
-- **Go to App's Workspace**: Switch to the app's workspace without activating the window (same as middle-click)
-- **Move to Workspace**: Submenu to move window to specific workspace
-- **Drag App**: Enter drag mode - window follows your cursor until clicked
 
 ## Customization
 
-### Command Line Customization
-
+### Command Line
 The easiest way to customize is through command line arguments:
 
 - **Edge trigger**: Use `--north`, `--south`, `--east`, or `--west`
@@ -161,37 +125,44 @@ The easiest way to customize is through command line arguments:
 - **MRU ordering**: Use `--recent` for smart window ordering
 - **Gaming mode**: Use `--main-character` to respect fullscreen apps
 
-### Code Customization
+### Code
 
 For advanced customization, modify `otter.py`:
 
 - **Trigger sensitivity**: Adjust `<= 5` in edge detection code (line ~256)
 - **Window styling**: Modify CSS in `create_window()` (line ~524)
 - **Cache update frequency**: Modify `cache_update_interval` (default: 2000ms, line ~174)
-- **System app filtering**: Update `system_apps` list (line ~757)
-- **Wnck recreation interval**: Modify `wnck_recreation_interval` (default: 3600s, line ~166)
+- **System app filtering**: Update `system_apps` list (line ~803)
+- **Wnck recreation interval**: Modify `wnck_recreation_interval` (default: 120s for testing, line ~153)
 
-## Debug Mode
 
-For detailed debugging, use the debug wrappers:
+## Testing
+
+Otter includes a comprehensive unit test suite to ensure code changes maintain functionality.
 
 ```bash
-# Simple debug logging
-./debug_otter_simple.py --east --ncols 6 --notitle --recent
+# Run all tests
+cd tests
+./run_tests.py
 
-# Ultra-verbose logging (generates large logs)
-./debug_otter_verbose.py --east --ncols 6 --notitle --recent
+# Run specific test module
+./run_tests.py test_configuration
+./run_tests.py test_edge_detection
+./run_tests.py test_wnck_management
 ```
 
-Debug logs are saved to `otter_debug_*.log` files with timestamps.
+**Test Coverage:**
+- Configuration and command-line parsing (59 tests total)
+- Edge detection and mouse positioning
+- Multi-monitor support
+- MRU ordering logic
+- Wnck state management and error recovery
+- HIDE_STATE semaphore behavior
+- Fullscreen detection
+- System window filtering
 
-## Version History
+See [tests/README.md](tests/README.md) for detailed testing documentation.
 
-- **v2.0.0**: Complete refactoring with bug fixes, logging, defensive programming
-- **v2.1.0**: Added MRU ordering (--recent)
-- **v2.2.0**: Added fullscreen detection (--main-character)
-- **v2.3.0**: Periodic Wnck recreation for long-term stability
-- **v2.4.0**: GTK theme support, middle-click workspace switching, HIDE_STATE semaphore
 
 ## License
 

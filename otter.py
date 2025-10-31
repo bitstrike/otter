@@ -2,30 +2,16 @@
 
 """
 Otter - X11 Window Switcher for Ubuntu Cinnamon Desktop
-A background application that shows active windows when mouse cursor is moved to y=0
-
-
-step-by-step, consider this python application below for a mouse driven x11 application switcher and make the following changes:
-1. add cli arguments for --north, --south, --east, --west to indicate which edge of the screen the mouse should be at to trigger the window switcher. The current default position --north (y0). the --east and --south options will need to use the cucrrent active display the mouse is under as multi-monitor setups may have various resoultion differences.
-2. currently, windows which are minimized do not show up in the switcher. Change this so that minimized windows are included in the switcher but indicated using a different style such as a faded thumbnail or a different border color.
-3. create a context menu activated with right click which can operate on the thumbnails under the mouse cursor. create methods for each menu option. menu options are:
-    - move app to current display
-    - resize app to current active display
-    - Minimize app
-    - Maximize app
-    - Switch to app (switch workspace or display to where app is located)
-    - Move to workspace(N) (if multiple workspaces are available, N is the workspace number and will have a submenu with all available workspaces)
-    - Drag app (move mouse cursor to center of app and make the app follow the mouse cursor until clicked again)
-4.
-5.
-6.
-7.
+A background application that shows active windows when mouse cursor is moved to screen edge
 """
+
+# Suppress accessibility bus warnings (harmless)
+import os
+os.environ['NO_AT_BRIDGE'] = '1'
 
 # Otter - X11 Window Switcher for Ubuntu Cinnamon Desktop
 import gi
 import logging
-import os
 import sys
 import signal
 import argparse
@@ -164,7 +150,7 @@ class OtterWindowSwitcher:
 
         # Wnck health tracking
         self.wnck_last_recreation = time.time()
-        self.wnck_recreation_interval = 3600  # Recreate Wnck screen every hour
+        self.wnck_recreation_interval = 120  # Recreate Wnck screen every 2 minutes (VERY aggressive for testing)
         self.wnck_call_count = 0
         self.wnck_just_recreated = False  # Flag to skip immediate force_update after recreation
         self.wnck_recreating = False  # Lock flag to prevent concurrent Wnck access during recreation
@@ -384,11 +370,21 @@ class OtterWindowSwitcher:
         """Get a unique identifier for a window"""
         try:
             return window.get_xid()
-        except:
+        except Exception as xid_error:
             # Fallback to window name + pid if XID not available
-            app = window.get_application()
-            pid = app.get_pid() if app else 0
-            return f"{window.get_name()}_{pid}"
+            logger.debug(f"get_xid() failed, using fallback: {xid_error}")
+            try:
+                app = window.get_application()
+                pid = app.get_pid() if app else 0
+                name = window.get_name() if window else "unknown"
+                return f"{name}_{pid}"
+            except Exception as fallback_error:
+                logger.error(f"CRITICAL: get_application() failed in get_window_id(): {fallback_error}")
+                # Last resort fallback
+                try:
+                    return f"unknown_{id(window)}"
+                except:
+                    return "unknown_window"
 
     # Update the capture_high_quality_screenshot method:
     def capture_high_quality_screenshot(self, window):
@@ -748,10 +744,31 @@ class OtterWindowSwitcher:
                 logger.debug("Skipping force_update immediately after recreation")
                 self.wnck_just_recreated = False  # Reset flag
             else:
-                self.screen_wnck.force_update()
+                try:
+                    self.screen_wnck.force_update()
+                except Exception as force_update_error:
+                    # If force_update fails, Wnck state is corrupted - recreate immediately
+                    logger.error(f"force_update() failed (Wnck corruption detected): {force_update_error}")
+                    logger.info("Attempting immediate Wnck recreation due to corruption...")
+                    if self.recreate_wnck_screen():
+                        # Try one more time with fresh screen
+                        try:
+                            self.screen_wnck.force_update()
+                        except Exception as retry_error:
+                            logger.error(f"force_update() failed after recreation: {retry_error}")
+                            return windows
+                    else:
+                        logger.error("Failed to recreate Wnck screen after corruption")
+                        return windows
 
             # Get all windows from Wnck
-            window_list = self.screen_wnck.get_windows()
+            try:
+                window_list = self.screen_wnck.get_windows()
+            except Exception as get_windows_error:
+                # If get_windows fails, Wnck state is corrupted
+                logger.error(f"get_windows() failed (Wnck corruption detected): {get_windows_error}")
+                return windows
+
             if not window_list:
                 return windows
 
@@ -762,20 +779,33 @@ class OtterWindowSwitcher:
                         continue
 
                     # Include normal windows, even if minimized
-                    window_type = window.get_window_type()
-                    if window_type != Wnck.WindowType.NORMAL:
+                    try:
+                        window_type = window.get_window_type()
+                        if window_type != Wnck.WindowType.NORMAL:
+                            continue
+                    except Exception as type_error:
+                        logger.debug(f"get_window_type() failed: {type_error}")
+                        # Assume it's not a normal window if we can't determine type
                         continue
 
                     # Safe handling of application - check if it exists first
+                    # This is a HIGH-RISK area: get_application() accesses WnckClassGroup
                     try:
                         app = window.get_application()
                         app_name = app.get_name() if app else "Unknown"
-                    except Exception:
+                    except Exception as app_error:
+                        logger.error(f"SEGFAULT RISK: get_application() failed - possible WnckClassGroup corruption: {app_error}")
                         app_name = "Unknown"
+                        # Consider triggering immediate Wnck recreation
+                        if "WnckClassGroup" in str(app_error) or "hash_table" in str(app_error):
+                            logger.error("CRITICAL: WnckClassGroup corruption detected, flagging for recreation")
+                            # Mark that we need recreation on next cycle
+                            self.wnck_last_recreation = 0  # Force recreation on next check
 
                     try:
                         window_name = window.get_name() or "Unknown"
-                    except Exception:
+                    except Exception as name_error:
+                        logger.error(f"SEGFAULT RISK: get_name() failed: {name_error}")
                         window_name = "Unknown"
 
                     # Skip common system applications and our own window
@@ -793,18 +823,21 @@ class OtterWindowSwitcher:
 
                         try:
                             is_minimized = window.is_minimized()
-                        except Exception:
+                        except Exception as min_error:
+                            logger.debug(f"is_minimized() failed: {min_error}")
                             is_minimized = False
 
                         try:
                             icon = window.get_icon() if window.get_icon() else None
-                        except Exception:
+                        except Exception as icon_error:
+                            logger.debug(f"get_icon() failed: {icon_error}")
                             icon = None
 
                         # Get XID once and cache it to avoid calling get_xid() on potentially stale objects
                         try:
                             xid = window.get_xid()
-                        except Exception:
+                        except Exception as xid_error:
+                            logger.debug(f"get_xid() failed during window collection: {xid_error}")
                             xid = None
 
                         windows.append({
@@ -1326,7 +1359,15 @@ class OtterWindowSwitcher:
         try:
             # Activate the selected window
             timestamp = Gtk.get_current_event_time()
-            window.activate(timestamp)
+            try:
+                window.activate(timestamp)
+            except Exception as activate_error:
+                logger.error(f"SEGFAULT RISK: window.activate() failed: {activate_error}")
+                # Check if this is Wnck corruption
+                if "Wnck" in str(activate_error) or "ClassGroup" in str(activate_error):
+                    logger.error("CRITICAL: Possible Wnck corruption during activate, flagging for recreation")
+                    self.wnck_last_recreation = 0
+                raise  # Re-raise to be caught by outer handler
 
             # Record MRU timestamp if --recent flag is enabled
             if self.config.get('recent', False):
@@ -1341,7 +1382,7 @@ class OtterWindowSwitcher:
             # The window will be hidden when mouse leaves (respecting --delay)
             self.window_clicked = True
         except Exception as e:
-            logger.error(f"Error activating window: {e}")
+            logger.error(f"Error in on_window_clicked handler: {e}")
 
     def grab_keyboard_focus(self):
         """Ensure window has keyboard focus"""
@@ -1652,12 +1693,19 @@ class OtterWindowSwitcher:
         """Switch to the application's workspace and display"""
         try:
             # Activate the window's workspace
-            workspace = window.get_workspace()
-            if workspace:
-                workspace.activate(Gtk.get_current_event_time())
+            try:
+                workspace = window.get_workspace()
+                if workspace:
+                    workspace.activate(Gtk.get_current_event_time())
+            except Exception as workspace_error:
+                logger.error(f"SEGFAULT RISK: get_workspace()/activate() failed: {workspace_error}")
 
             # Activate the window
-            window.activate(Gtk.get_current_event_time())
+            try:
+                window.activate(Gtk.get_current_event_time())
+            except Exception as activate_error:
+                logger.error(f"SEGFAULT RISK: window.activate() in on_switch_to_app failed: {activate_error}")
+                raise
 
             # Record MRU timestamp if --recent flag is enabled
             if self.config.get('recent', False):
@@ -1675,12 +1723,17 @@ class OtterWindowSwitcher:
         """Switch to the application's workspace without activating the window"""
         try:
             # Only activate the window's workspace (don't bring window forward)
-            workspace = window.get_workspace()
-            if workspace:
-                workspace.activate(Gtk.get_current_event_time())
-                logger.info(f"Switched to workspace containing {window.get_name()}")
-            else:
-                logger.warning(f"Window {window.get_name()} has no workspace")
+            try:
+                workspace = window.get_workspace()
+                if workspace:
+                    workspace.activate(Gtk.get_current_event_time())
+                    window_name = window.get_name()
+                    logger.info(f"Switched to workspace containing {window_name}")
+                else:
+                    logger.warning(f"Window has no workspace")
+            except Exception as workspace_error:
+                logger.error(f"SEGFAULT RISK: get_workspace() in on_switch_to_app_workspace failed: {workspace_error}")
+                raise
 
             # Record MRU timestamp if --recent flag is enabled
             if self.config.get('recent', False):
@@ -1699,7 +1752,10 @@ class OtterWindowSwitcher:
         try:
             window.move_to_workspace(workspace)
         except Exception as e:
-            logger.error(f"Error moving app to workspace: {e}")
+            logger.error(f"SEGFAULT RISK: move_to_workspace() failed: {e}")
+            if "Wnck" in str(e) or "ClassGroup" in str(e):
+                logger.error("CRITICAL: Possible Wnck corruption during move_to_workspace")
+                self.wnck_last_recreation = 0
 
 
     def on_drag_app(self, menu_item, window):
