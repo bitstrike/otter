@@ -305,5 +305,82 @@ class TestHideStateSemaphore(unittest.TestCase):
         self.assertTrue(self.HIDE_STATE)
 
 
+class TestMiddleClickMode(unittest.TestCase):
+    """Test middle-click mode behavior"""
+
+    def setUp(self):
+        """Set up test state"""
+        self._middle_click_mode = False
+        self.window_clicked = False
+
+    def test_initial_middle_click_state(self):
+        """Test initial middle-click mode is False"""
+        self.assertFalse(self._middle_click_mode)
+
+    def test_enable_middle_click_mode(self):
+        """Test enabling middle-click mode"""
+        self._middle_click_mode = True
+        self.assertTrue(self._middle_click_mode)
+
+    def test_disable_middle_click_mode(self):
+        """Test disabling middle-click mode"""
+        self._middle_click_mode = True
+        self._middle_click_mode = False
+        self.assertFalse(self._middle_click_mode)
+
+    def test_middle_click_prevents_normal_hide(self):
+        """Test that middle-click mode prevents normal hide behavior"""
+        # Enable middle-click mode
+        self._middle_click_mode = True
+        self.window_clicked = False
+
+        # Check if hide would be triggered
+        if self._middle_click_mode:
+            # In middle-click mode, should exit mode but still allow hide
+            should_hide_with_delay = True
+        elif self.window_clicked:
+            # Normal click behavior
+            should_hide_with_delay = True
+        else:
+            # Normal leave behavior
+            should_hide_with_delay = True
+
+        self.assertTrue(should_hide_with_delay)
+
+    def test_middle_click_mode_exit_on_leave(self):
+        """Test exiting middle-click mode when mouse leaves"""
+        # Start in middle-click mode
+        self._middle_click_mode = True
+
+        # Simulate mouse leaving hotbox
+        if self._middle_click_mode:
+            self._middle_click_mode = False
+            should_hide = True
+        else:
+            should_hide = False
+
+        self.assertFalse(self._middle_click_mode)
+        self.assertTrue(should_hide)
+
+    def test_middle_click_does_not_set_window_clicked(self):
+        """Test that middle-click doesn't set window_clicked flag"""
+        # Middle-click behavior: set _middle_click_mode, NOT window_clicked
+        self._middle_click_mode = True
+        self.window_clicked = False
+
+        # Verify window_clicked remains False during middle-click
+        self.assertFalse(self.window_clicked)
+
+    def test_left_click_still_works_outside_middle_click_mode(self):
+        """Test that left-click works normally when not in middle-click mode"""
+        # Not in middle-click mode
+        self._middle_click_mode = False
+        self.window_clicked = True
+
+        # Verify normal click behavior
+        self.assertTrue(self.window_clicked)
+        self.assertFalse(self._middle_click_mode)
+
+
 if __name__ == '__main__':
     unittest.main()

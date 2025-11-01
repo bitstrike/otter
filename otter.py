@@ -133,6 +133,7 @@ class OtterWindowSwitcher:
         self.is_visible = False
         self.window_clicked = False
         self.HIDE_STATE = True  # Semaphore: True = window can hide, False = window cannot hide
+        self._middle_click_mode = False  # Flag to keep otter visible during middle-click workflow
 
         # Drag mode state - initialize here to avoid AttributeError
         self.drag_active = False
@@ -1473,7 +1474,14 @@ class OtterWindowSwitcher:
         """Handle mouse leaving the window"""
         # Only hide if mouse actually left the window area
         if event.detail != Gdk.NotifyType.INFERIOR:
-            if self.window_clicked:
+            # If in middle-click mode, exit it and hide when mouse leaves
+            if self._middle_click_mode:
+                logger.debug("Mouse leaving during middle-click mode, exiting middle-click mode")
+                self._middle_click_mode = False
+                # Hide after leaving hotbox
+                delay = max(300, self.config['hide_delay'])
+                GLib.timeout_add(delay, self.delayed_hide)
+            elif self.window_clicked:
                 # Window was clicked - use the configured delay
                 if self.config['hide_delay'] > 0:
                     GLib.timeout_add(self.config['hide_delay'], self._do_hide)
@@ -1494,6 +1502,21 @@ class OtterWindowSwitcher:
         # Also reset the clicked flag if mouse re-enters
         self.window_clicked = False
         return False
+
+    def _redisplay_otter_after_workspace_switch(self):
+        """Redisplay otter window after a workspace switch from middle-click"""
+        try:
+            if self.is_visible and self.window:
+                # If otter is still visible, ensure it's on top
+                self.window.present()
+                logger.debug("Otter redisplayed after workspace switch")
+            elif not self.is_visible and self.window:
+                # If otter became hidden during workspace switch, show it again
+                self.show_window()
+                logger.info("Otter restored to visible after workspace switch")
+        except Exception as e:
+            logger.error(f"Error redisplaying otter after workspace switch: {e}")
+        return False  # Don't repeat
 
     def delayed_hide(self):
         """Hide window after a delay if mouse is not over it"""
@@ -1543,7 +1566,13 @@ class OtterWindowSwitcher:
         """Handle button press events for context menu and middle-click"""
         if event.type == Gdk.EventType.BUTTON_PRESS:
             if event.button == 2:  # Middle-click
+                # Enable middle-click mode to keep otter visible
+                self._middle_click_mode = True
+                self.window_clicked = False  # Prevents normal hide behavior on click
                 self.on_switch_to_app_workspace(None, window)
+                # Schedule otter to reappear if workspace switched
+                # This ensures otter is visible on the new workspace
+                GLib.timeout_add(200, self._redisplay_otter_after_workspace_switch)
                 return True
             elif event.button == 3:  # Right-click
                 self.show_context_menu(button, window)
