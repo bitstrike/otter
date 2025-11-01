@@ -111,6 +111,28 @@ The application runs in the background. To activate:
 - `--delay` may cause minor visual flickering on hide
 - `--main-character` prevents interrupting games like Minecraft when in fullscreen
 
+## Window Operations
+
+### Drag App Feature
+Right-click any window thumbnail and select **"Drag App"** to enter drag mode:
+
+1. Cursor automatically warps to the window's title bar center
+2. Interactive window move mode is activated
+3. Move your mouse to reposition the window
+4. Click or press Enter to place the window at the new location
+
+**Implementation:**
+The feature uses a simple, reliable three-step approach:
+1. **Cursor warp** - Uses Gdk to move cursor to window title bar center
+2. **Window activation** - Activates the window so it receives input
+3. **Move mode initiation** - Calls Wnck's keyboard_move() to enter interactive move mode
+
+**How it works:**
+- Warps cursor using Gdk (proven to work reliably)
+- Activates window to ensure it receives mouse input
+- Initiates interactive move mode through window manager (Wnck keyboard_move)
+- Window follows mouse movement until clicked or Enter pressed
+- Pure Python implementation using GTK and Wnck (no external tools)
 
 ## Customization
 

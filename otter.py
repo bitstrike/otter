@@ -1759,43 +1759,44 @@ class OtterWindowSwitcher:
 
 
     def on_drag_app(self, menu_item, window):
-        """Start drag mode - position cursor on title bar."""
+        """Start drag mode - warp cursor to title bar and initiate move"""
         try:
-            # Get window geometry
-            geometry = window.get_geometry()
+            # Get window geometry (returns tuple: x, y, width, height)
+            x, y, width, height = window.get_geometry()
 
-            # Position cursor on title bar (top center of window)
-            title_bar_x = geometry.x + geometry.width // 2
-            title_bar_y = geometry.y + 15  # Approximate title bar height
+            # Calculate title bar center position (top center of window)
+            title_bar_x = x + width // 2
+            title_bar_y = y + 15  # Approximate title bar height
 
-            # Warp cursor to title bar
-            display = Gdk.Display.get_default()
-            seat = display.get_default_seat()
+            logger.info(f"Starting drag mode for window '{window.get_name()}'")
+            logger.info(f"Warping cursor to title bar at ({title_bar_x}, {title_bar_y})")
+
+            # Get Gdk display and device
+            gdk_display = Gdk.Display.get_default()
+            seat = gdk_display.get_default_seat()
             pointer = seat.get_pointer()
-            pointer.warp(display.get_default_screen(), title_bar_x, title_bar_y)
 
-            # Set drag mode
-            self.drag_window = window
-            self.drag_active = True
+            # Warp pointer using Gdk (proven to work reliably)
+            screen = gdk_display.get_default_screen()
+            pointer.warp(screen, title_bar_x, title_bar_y)
 
-            # Only connect signal if not already connected
-            if not self.drag_signal_id:
-                self.drag_signal_id = self.window.connect("button-press-event", self.on_drag_click)
+            logger.info(f"Cursor warped to ({title_bar_x}, {title_bar_y})")
+
+            # Activate window first
+            window.activate(Gtk.get_current_event_time())
+            logger.info("Window activated")
+
+            # Initiate interactive move mode using Wnck keyboard_move
+            try:
+                window.keyboard_move()
+                logger.info("Window move mode activated - move mouse to reposition, click or press Enter to place")
+            except Exception as e:
+                logger.warning(f"keyboard_move() failed: {e}")
+                logger.info("Fallback: Window is active. Try Alt+F7 to move, or use your window manager's move hotkey")
 
         except Exception as e:
-            logger.error(f"Error starting drag mode: {e}")
-        
-    def on_drag_click(self, widget, event):
-        """Stop drag mode when clicked"""
-        if self.drag_active:
-            self.drag_active = False
-            self.drag_window = None
-            # Disconnect the signal
-            if self.drag_signal_id:
-                self.window.disconnect(self.drag_signal_id)
-                self.drag_signal_id = None
-            return True
-        return False
+            logger.error(f"Error in drag mode: {e}")
+
 
 
     def cleanup(self):
