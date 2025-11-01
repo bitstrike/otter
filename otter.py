@@ -87,6 +87,22 @@ except Exception:
     pass
 
 class OtterWindowSwitcher:
+    # Workspace color palette (supports up to 10 workspaces with distinct colors)
+    # Colors are vibrant and highly distinct for quick visual scanning
+    # Chosen to maximize contrast and avoid confusion between adjacent workspaces
+    WORKSPACE_COLORS = [
+        "#E74C3C",  # 1: Red (bright, high contrast)
+        "#27AE60",  # 2: Green (distinct from red)
+        "#2980B9",  # 3: Blue (distinctly different from green)
+        "#F39C12",  # 4: Orange (bright, distinct from blue)
+        "#8E44AD",  # 5: Purple (distinct from orange)
+        "#16A085",  # 6: Dark Teal (distinct from purple)
+        "#C0392B",  # 7: Dark Red (different from bright red)
+        "#D35400",  # 8: Dark Orange (distinct from orange)
+        "#2C3E50",  # 9: Dark Blue-Gray (distinct from all)
+        "#E67E22",  # 10: Burnt Orange (distinct from all others)
+    ]
+
     def __init__(self, args=None):
         """Initialize the window switcher"""
         logger.info("Initializing Otter Window Switcher")
@@ -643,6 +659,14 @@ class OtterWindowSwitcher:
                 background-color: alpha(@theme_selected_bg_color, 0.5);
                 border: 2px solid @theme_selected_bg_color;
             }
+            .workspace-badge {
+                background-color: alpha(@theme_selected_bg_color, 0.85);
+                color: @theme_selected_fg_color;
+                border-radius: 50%;
+                padding: 4px;
+                margin: 4px;
+                border: 1px solid @theme_selected_bg_color;
+            }
             label {
                 color: @theme_fg_color;
             }
@@ -841,13 +865,32 @@ class OtterWindowSwitcher:
                             logger.debug(f"get_xid() failed during window collection: {xid_error}")
                             xid = None
 
+                        # Get workspace information for corner badge display
+                        workspace_index = None
+                        workspace_name = "Unknown"
+                        try:
+                            workspace = window.get_workspace()
+                            if workspace:
+                                # Find workspace index (1-indexed for user display)
+                                all_workspaces = self.screen_wnck.get_workspaces()
+                                for idx, ws in enumerate(all_workspaces):
+                                    if ws == workspace:
+                                        workspace_index = idx + 1  # 1-indexed
+                                        workspace_name = ws.get_name()
+                                        break
+                        except Exception as ws_error:
+                            # Gracefully degrade - badge will show "?" if lookup fails
+                            logger.debug(f"Failed to get workspace info: {ws_error}")
+
                         windows.append({
                             'window': window,
                             'name': window_name,
                             'app_name': app_name,
                             'icon': icon,
                             'is_minimized': is_minimized,
-                            'xid': xid  # Cache XID for MRU sorting
+                            'xid': xid,  # Cache XID for MRU sorting
+                            'workspace_index': workspace_index,      # 1-indexed workspace number
+                            'workspace_name': workspace_name         # Workspace name
                         })
 
                 except Exception as e:
@@ -880,12 +923,13 @@ class OtterWindowSwitcher:
         return windows
 
     def create_window_thumbnail(self, window_info: Dict) -> Gtk.Widget:
-        """Create a thumbnail button for a window with different style for minimized windows"""
+        """Create a thumbnail button for a window with workspace badge indicator"""
         window = window_info['window']
         name = window_info['name']
         app_name = window_info['app_name']
         icon = window_info['icon']
         is_minimized = window_info.get('is_minimized', False)
+        workspace_index = window_info.get('workspace_index')  # Get workspace for badge
 
         # Create main button
         button = Gtk.Button()
@@ -897,8 +941,8 @@ class OtterWindowSwitcher:
         # Create vertical box for content
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
 
-        # Try to get window screenshot/thumbnail
-        thumbnail = self.get_window_thumbnail(window)
+        # Try to get window screenshot/thumbnail with workspace badge overlay
+        thumbnail = self.get_window_thumbnail_with_badge(window, workspace_index)
         if thumbnail:
             vbox.pack_start(thumbnail, False, False, 0)
         elif icon:
@@ -999,6 +1043,105 @@ class OtterWindowSwitcher:
         except Exception as e:
             logger.error(f"Error creating thumbnail: {e}")
             return self.create_fallback_thumbnail(window)
+
+    def get_window_thumbnail_with_badge(self, window, workspace_index):
+        """Get thumbnail with workspace badge overlay in top-right corner.
+
+        Returns a Gtk.Overlay containing the thumbnail with a workspace
+        badge. The badge is pass-through so clicks pass to activate window.
+        """
+        try:
+            window_id = self.get_window_id(window)
+            cached_screenshot = self.screenshot_cache.get(window_id)
+
+            if not cached_screenshot:
+                return None
+
+            # Create base thumbnail with frame
+            image = Gtk.Image()
+            image.set_from_pixbuf(cached_screenshot)
+            frame = Gtk.Frame()
+            frame.set_shadow_type(Gtk.ShadowType.IN)
+            frame.add(image)
+
+            # Only add badge overlay if we have workspace info
+            if workspace_index is None:
+                return frame
+
+            # Create overlay container for badge positioning
+            overlay = Gtk.Overlay()
+            overlay.add(frame)
+
+            # Create and add the workspace badge
+            badge = self.create_workspace_badge(workspace_index)
+            if badge:
+                overlay.add_overlay(badge)
+                # Allow clicks to pass through badge to activate window
+                overlay.set_overlay_pass_through(badge, True)
+
+            return overlay
+
+        except Exception as e:
+            logger.debug(f"Error creating thumbnail with badge: {e}")
+            return None
+
+    def create_workspace_badge(self, workspace_index):
+        """Create a workspace indicator badge for the top-right corner.
+
+        Creates a small circular badge displaying the workspace number (1-indexed).
+        Color-coded by workspace (different color for each workspace).
+        Positioned absolutely at top-right, doesn't interfere with window clicks.
+        """
+        try:
+            # Container box positioned at top-right corner
+            badge_container = Gtk.Box()
+            badge_container.set_size_request(40, 40)
+            badge_container.set_halign(Gtk.Align.END)      # Right alignment
+            badge_container.set_valign(Gtk.Align.START)    # Top alignment
+            badge_container.set_margin_end(2)              # Small margin from edge
+            badge_container.set_margin_top(2)
+
+            # Badge label - displays workspace number (1-indexed for users)
+            badge_label = Gtk.Label()
+            display_text = str(workspace_index) if workspace_index else "?"
+            badge_label.set_markup(f"<span size='11000' weight='bold'>{display_text}</span>")
+            badge_label.set_justify(Gtk.Justification.CENTER)
+
+            # Get color for this workspace (cycle through palette for workspaces > 10)
+            if workspace_index and workspace_index > 0:
+                color_index = (workspace_index - 1) % len(self.WORKSPACE_COLORS)
+                workspace_color = self.WORKSPACE_COLORS[color_index]
+
+                # Create CSS provider with workspace-specific styling
+                css_provider = Gtk.CssProvider()
+                css_data = f"""
+                    label {{
+                        background-color: {workspace_color};
+                        color: white;
+                        border-radius: 50%;
+                        padding: 4px;
+                        margin: 4px;
+                        border: 1px solid {workspace_color};
+                    }}
+                """.encode('utf-8')
+                css_provider.load_from_data(css_data)
+
+                # Apply color-specific CSS to the badge label
+                badge_context = badge_label.get_style_context()
+                badge_context.add_provider(css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            else:
+                # Fallback styling for unknown workspace
+                badge_context = badge_label.get_style_context()
+                badge_context.add_class("workspace-badge")
+
+            badge_container.pack_start(badge_label, True, True, 0)
+            badge_container.show_all()
+
+            return badge_container
+
+        except Exception as e:
+            logger.debug(f"Error creating workspace badge: {e}")
+            return None
 
     def capture_window_screenshot(self, window):
         """Capture a screenshot of the window"""
