@@ -261,8 +261,8 @@ class OtterWindowSwitcher:
 
     def create_startup_splash(self):
         """Create a splash screen with progress bar for startup thumbnail preprocessing"""
-        splash = Gtk.Window(Gtk.WindowType.TOPLEVEL)
-        splash.set_window_position(Gtk.WindowPosition.CENTER)
+        splash = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        splash.set_position(Gtk.WindowPosition.CENTER)
         splash.set_decorated(False)
         splash.set_keep_above(True)
         splash.set_skip_taskbar_hint(True)
@@ -270,7 +270,7 @@ class OtterWindowSwitcher:
         splash.set_modal(False)
 
         # Set window size
-        splash.set_default_size(400, 120)
+        splash.set_default_size(400, 160)
 
         # Create a box layout
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -279,11 +279,23 @@ class OtterWindowSwitcher:
         vbox.set_margin_top(20)
         vbox.set_margin_bottom(20)
 
+        # Add logo and title in a horizontal box
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        header_box.set_halign(Gtk.Align.CENTER)
+
+        # Add otter logo (UTF-8 icon)
+        logo = Gtk.Label()
+        logo.set_markup("<span size='48000'>🦦</span>")
+        header_box.pack_start(logo, False, False, 0)
+
         # Add title label
         title = Gtk.Label()
         title.set_markup("<b>Otter Window Switcher</b>")
         title.set_halign(Gtk.Align.CENTER)
-        vbox.pack_start(title, False, False, 0)
+        title.set_valign(Gtk.Align.CENTER)
+        header_box.pack_start(title, False, False, 0)
+
+        vbox.pack_start(header_box, False, False, 0)
 
         # Add status label
         status = Gtk.Label()
