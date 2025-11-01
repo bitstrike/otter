@@ -191,6 +191,10 @@ class OtterWindowSwitcher:
         self.cache_update_interval = 2000  # 2 seconds
         self.last_valid_screenshots = {}
 
+        # Startup preprocessing state
+        self.startup_splash = None
+        self.startup_preprocessing_active = False
+
         # Set up the window
         self.create_window()
 
@@ -254,6 +258,147 @@ class OtterWindowSwitcher:
     def setup_screenshot_caching(self):
         """Set up background screenshot caching for better thumbnails"""
         self.screenshot_monitor_id = GLib.timeout_add(self.cache_update_interval, self.update_screenshot_cache)
+
+    def create_startup_splash(self):
+        """Create a splash screen with progress bar for startup thumbnail preprocessing"""
+        splash = Gtk.Window(Gtk.WindowType.TOPLEVEL)
+        splash.set_window_position(Gtk.WindowPosition.CENTER)
+        splash.set_decorated(False)
+        splash.set_keep_above(True)
+        splash.set_skip_taskbar_hint(True)
+        splash.set_skip_pager_hint(True)
+        splash.set_modal(False)
+
+        # Set window size
+        splash.set_default_size(400, 120)
+
+        # Create a box layout
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        vbox.set_margin_start(20)
+        vbox.set_margin_end(20)
+        vbox.set_margin_top(20)
+        vbox.set_margin_bottom(20)
+
+        # Add title label
+        title = Gtk.Label()
+        title.set_markup("<b>Otter Window Switcher</b>")
+        title.set_halign(Gtk.Align.CENTER)
+        vbox.pack_start(title, False, False, 0)
+
+        # Add status label
+        status = Gtk.Label()
+        status.set_markup("<small>Pre-loading window thumbnails...</small>")
+        status.set_halign(Gtk.Align.CENTER)
+        vbox.pack_start(status, False, False, 0)
+
+        # Add progress bar
+        progress = Gtk.ProgressBar()
+        progress.set_show_text(True)
+        progress.set_fraction(0.0)
+        vbox.pack_start(progress, False, False, 0)
+
+        splash.add(vbox)
+        splash.show_all()
+
+        # Store references for updates
+        self.startup_splash = {
+            'window': splash,
+            'progress': progress,
+            'status': status
+        }
+
+        return splash
+
+    def update_startup_progress(self, current, total):
+        """Update the startup splash progress bar"""
+        if not self.startup_splash:
+            return
+
+        try:
+            progress = self.startup_splash['progress']
+            status = self.startup_splash['status']
+
+            if total > 0:
+                fraction = min(1.0, current / total)
+                progress.set_fraction(fraction)
+                progress.set_text(f"{current}/{total}")
+                status.set_markup(f"<small>Pre-loading window thumbnails... {current}/{total}</small>")
+
+            # Keep GTK responsive
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+        except Exception as e:
+            logger.debug(f"Error updating startup progress: {e}")
+
+    def preprocess_startup_thumbnails(self):
+        """Pre-process thumbnails for all open windows on startup with progress feedback"""
+        if not self.screen_wnck:
+            logger.debug("Wnck not available, skipping startup preprocessing")
+            return
+
+        self.startup_preprocessing_active = True
+        logger.info("Starting startup thumbnail preprocessing...")
+
+        try:
+            # Create splash screen
+            self.create_startup_splash()
+
+            # Give splash time to render
+            for _ in range(5):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+                GLib.usleep(10000)
+
+            # Get all windows
+            try:
+                current_windows = self.get_user_windows()
+            except Exception as e:
+                logger.error(f"Error getting windows during startup: {e}")
+                current_windows = []
+
+            total_windows = len(current_windows)
+            logger.info(f"Preprocessing screenshots for {total_windows} windows")
+
+            # Pre-capture screenshots for each window
+            for i, window_info in enumerate(current_windows):
+                try:
+                    if not self.startup_preprocessing_active:
+                        logger.info("Startup preprocessing cancelled")
+                        break
+
+                    # Update progress
+                    self.update_startup_progress(i + 1, total_windows)
+
+                    # Capture screenshot
+                    window = window_info['window']
+                    screenshot = self.capture_high_quality_screenshot(window)
+
+                    if screenshot:
+                        window_id = self.get_window_id(window)
+                        self.screenshot_cache[window_id] = screenshot
+                        logger.debug(f"Cached screenshot for window {i + 1}/{total_windows}")
+
+                    # Small delay to avoid blocking
+                    GLib.usleep(50000)
+
+                except Exception as e:
+                    logger.debug(f"Error preprocessing thumbnail {i + 1}: {e}")
+                    continue
+
+            logger.info("Startup thumbnail preprocessing complete")
+
+        except Exception as e:
+            logger.error(f"Error during startup preprocessing: {e}")
+        finally:
+            self.startup_preprocessing_active = False
+
+            # Close splash screen
+            if self.startup_splash:
+                try:
+                    self.startup_splash['window'].destroy()
+                except Exception as e:
+                    logger.debug(f"Error destroying splash window: {e}")
+                self.startup_splash = None
 
     def check_mouse_position(self):
         """Check if mouse cursor is at the specified screen edge and show/hide window accordingly"""
@@ -2126,6 +2271,12 @@ class OtterWindowSwitcher:
     def run(self):
         """Run the application"""
         try:
+            # Pre-process startup thumbnails before entering main loop
+            # This populates the cache so the first time user triggers the switcher,
+            # they see cached images instead of waiting 15+ seconds for capture
+            GLib.idle_add(self.preprocess_startup_thumbnails)
+
+            # Run the main event loop
             Gtk.main()
         except KeyboardInterrupt:
             logger.info("Received interrupt signal, shutting down...")
