@@ -1720,20 +1720,36 @@ class OtterWindowSwitcher:
             logger.error(f"Error switching to app: {e}")
 
     def on_switch_to_app_workspace(self, menu_item, window):
-        """Switch to the application's workspace without activating the window"""
+        """Middle-click handler: if app is in current workspace, activate it; otherwise switch workspaces"""
         try:
-            # Only activate the window's workspace (don't bring window forward)
+            # Get the window's workspace
             try:
-                workspace = window.get_workspace()
-                if workspace:
-                    workspace.activate(Gtk.get_current_event_time())
-                    window_name = window.get_name()
-                    logger.info(f"Switched to workspace containing {window_name}")
-                else:
+                window_workspace = window.get_workspace()
+                if not window_workspace:
                     logger.warning(f"Window has no workspace")
+                    return
             except Exception as workspace_error:
                 logger.error(f"SEGFAULT RISK: get_workspace() in on_switch_to_app_workspace failed: {workspace_error}")
                 raise
+
+            # Get the current active workspace
+            try:
+                current_workspace = self.screen_wnck.get_active_workspace()
+            except Exception as e:
+                logger.error(f"Could not get active workspace: {e}")
+                current_workspace = None
+
+            window_name = window.get_name()
+
+            # Check if the window is already in the current workspace
+            if current_workspace and window_workspace == current_workspace:
+                # Window is already on current workspace - just activate it
+                window.activate(Gtk.get_current_event_time())
+                logger.info(f"Window '{window_name}' is already on current workspace - brought to front")
+            else:
+                # Window is on a different workspace - switch to that workspace
+                window_workspace.activate(Gtk.get_current_event_time())
+                logger.info(f"Switched to workspace containing '{window_name}'")
 
             # Record MRU timestamp if --recent flag is enabled
             if self.config.get('recent', False):
@@ -1745,7 +1761,7 @@ class OtterWindowSwitcher:
                     logger.debug(f"Could not update MRU timestamp: {e}")
 
         except Exception as e:
-            logger.error(f"Error switching to app workspace: {e}")
+            logger.error(f"Error in middle-click handler: {e}")
 
     def on_move_to_workspace(self, menu_item, window, workspace):
         """Move the application to the specified workspace"""
