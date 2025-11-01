@@ -16,6 +16,7 @@ import sys
 import signal
 import argparse
 import time
+import threading
 from typing import List, Dict, Optional, Tuple
 import colorsys
 
@@ -91,6 +92,9 @@ class OtterWindowSwitcher:
         """Initialize the window switcher"""
         logger.info("Initializing Otter Window Switcher")
 
+        # Threading lock for Wnck access (prevents race conditions and corruption)
+        self.wnck_lock = threading.RLock()
+
         # Parse arguments and set up configuration
         if args:
             self.config = {
@@ -116,11 +120,17 @@ class OtterWindowSwitcher:
             logger.error(f"Failed to initialize GTK: {e}")
             raise
 
-        # Initialize Wnck if available
+        # Initialize Wnck if available (with thread safety)
         if WNCK_AVAILABLE:
             try:
-                self.screen_wnck = Wnck.Screen.get_default()
-                self.screen_wnck.force_update()
+                with self.wnck_lock:
+                    self.screen_wnck = Wnck.Screen.get_default()
+                    if self.screen_wnck:
+                        try:
+                            self.screen_wnck.force_update()
+                        except Exception as force_update_error:
+                            logger.warning(f"force_update() failed during init: {force_update_error}")
+                            # Don't fail on force_update - screen is still usable
             except Exception as e:
                 logger.error(f"Failed to initialize Wnck: {e}")
                 self.screen_wnck = None
@@ -192,6 +202,23 @@ class OtterWindowSwitcher:
             'recent': False,  # Most recently used ordering
             'main_character': False  # Respect fullscreen apps
         }
+
+    def window_is_valid(self, window) -> bool:
+        """Check if a window object is still valid (not deleted/corrupted).
+
+        This prevents segfaults from accessing stale window pointers.
+        """
+        if not window:
+            return False
+
+        try:
+            # Try a safe read-only operation that indicates the window is valid
+            # get_name() is the safest Wnck method - it doesn't access WnckClassGroup
+            name = window.get_name()
+            return name is not None
+        except Exception as e:
+            logger.debug(f"Window validation failed: {e}")
+            return False
 
     def calculate_layout_dimensions(self, window_count):
         """Calculate the missing dimension (rows or columns) based on window count"""
@@ -445,26 +472,51 @@ class OtterWindowSwitcher:
                 return None
 
             # Get the X11 window ID
-            xid = window.get_xid()
+            try:
+                xid = window.get_xid()
+            except Exception as e:
+                logger.debug(f"Failed to get XID: {e}")
+                return None
+
             if not xid:
                 return None
 
             # Get the GDK window from XID
             display = Gdk.Display.get_default()
-            gdk_window = GdkX11.X11Window.foreign_new_for_display(display, xid)
+            if not display:
+                logger.debug("No display available")
+                return None
 
-            if gdk_window and gdk_window.is_viewable():
-                # Get window dimensions
-                width = gdk_window.get_width()
-                height = gdk_window.get_height()
+            try:
+                gdk_window = GdkX11.X11Window.foreign_new_for_display(display, xid)
+            except Exception as e:
+                logger.debug(f"Failed to create GDK window from XID: {e}")
+                return None
 
-                if width > 0 and height > 0:
-                    # Capture directly from the window
-                    pixbuf = Gdk.pixbuf_get_from_window(gdk_window, 0, 0, width, height)
-                    return pixbuf
+            # NULL check - foreign_new_for_display can return None
+            if not gdk_window:
+                logger.debug(f"GDK window creation returned None for XID {xid}")
+                return None
+
+            try:
+                if gdk_window.is_viewable():
+                    # Get window dimensions
+                    width = gdk_window.get_width()
+                    height = gdk_window.get_height()
+
+                    if width > 0 and height > 0:
+                        # Capture directly from the window
+                        pixbuf = Gdk.pixbuf_get_from_window(gdk_window, 0, 0, width, height)
+                        # NULL check for pixbuf
+                        if pixbuf:
+                            return pixbuf
+                        else:
+                            logger.debug(f"pixbuf_get_from_window returned None for window {xid}")
+            except Exception as e:
+                logger.debug(f"Error during viewable check or capture: {e}")
 
         except Exception as e:
-            logger.error(f"Error in isolated capture: {e}")
+            logger.debug(f"Error in isolated capture: {e}")
 
         return None
 
@@ -498,27 +550,37 @@ class OtterWindowSwitcher:
     def _do_capture_after_raise(self, window, active_window, timestamp):
         """Capture window content after it has been raised (called via idle callback)"""
         try:
+            # Validate that window still exists (defensive check)
+            if not self.window_is_valid(window):
+                logger.debug("Window is no longer valid, skipping deferred capture")
+                return False
+
             # Capture the window area
             geometry = window.get_geometry()
             x, y, width, height = geometry
 
             if width > 0 and height > 0:
                 root_window = Gdk.get_default_root_window()
-                pixbuf = Gdk.pixbuf_get_from_window(root_window, x, y, width, height)
+                if root_window:
+                    pixbuf = Gdk.pixbuf_get_from_window(root_window, x, y, width, height)
 
-                # Store in cache
-                window_id = self.get_window_id(window)
-                if pixbuf:
-                    scaled = self.scale_pixbuf_high_quality(pixbuf)
-                    if scaled:
-                        self.screenshot_cache[window_id] = scaled
+                    # Store in cache (with null check)
+                    if pixbuf:
+                        window_id = self.get_window_id(window)
+                        scaled = self.scale_pixbuf_high_quality(pixbuf)
+                        if scaled:
+                            self.screenshot_cache[window_id] = scaled
 
-                # Restore the previously active window
-                if active_window and active_window != window and self.screen_wnck:
-                    active_window.activate(timestamp + 1)
+            # Restore the previously active window (with validation)
+            if active_window and active_window != window and self.screen_wnck:
+                if self.window_is_valid(active_window):
+                    try:
+                        active_window.activate(timestamp + 1)
+                    except Exception as restore_error:
+                        logger.debug(f"Could not restore previous window: {restore_error}")
 
         except Exception as e:
-            logger.error(f"Error in deferred capture: {e}")
+            logger.debug(f"Error in deferred capture: {e}")
 
         return False
 
@@ -730,133 +792,127 @@ class OtterWindowSwitcher:
             logger.debug("Wnck recreation in progress, skipping query")
             return windows
 
-        # Periodically recreate Wnck screen to prevent corruption
-        if self.should_recreate_wnck():
-            self.recreate_wnck_screen()
+        # Use lock to prevent Wnck access during other operations
+        with self.wnck_lock:
+            # Periodically recreate Wnck screen to prevent corruption
+            if self.should_recreate_wnck():
+                self.recreate_wnck_screen()
 
-        # Track Wnck usage
-        self.wnck_call_count += 1
+            # Track Wnck usage
+            self.wnck_call_count += 1
 
-        try:
-            # CRITICAL: Force Wnck to update its internal state before querying
-            # This prevents accessing stale/corrupted WnckClassGroup objects
-            # EXCEPT right after recreation - let it initialize naturally first
-            if self.wnck_just_recreated:
-                logger.debug("Skipping force_update immediately after recreation")
-                self.wnck_just_recreated = False  # Reset flag
-            else:
-                try:
-                    self.screen_wnck.force_update()
-                except Exception as force_update_error:
-                    # If force_update fails, Wnck state is corrupted - recreate immediately
-                    logger.error(f"force_update() failed (Wnck corruption detected): {force_update_error}")
-                    logger.info("Attempting immediate Wnck recreation due to corruption...")
-                    if self.recreate_wnck_screen():
-                        # Try one more time with fresh screen
-                        try:
-                            self.screen_wnck.force_update()
-                        except Exception as retry_error:
-                            logger.error(f"force_update() failed after recreation: {retry_error}")
-                            return windows
-                    else:
-                        logger.error("Failed to recreate Wnck screen after corruption")
-                        return windows
-
-            # Get all windows from Wnck
             try:
-                window_list = self.screen_wnck.get_windows()
-            except Exception as get_windows_error:
-                # If get_windows fails, Wnck state is corrupted
-                logger.error(f"get_windows() failed (Wnck corruption detected): {get_windows_error}")
-                return windows
+                # CRITICAL: Force Wnck to update its internal state before querying
+                # This prevents accessing stale/corrupted WnckClassGroup objects
+                # EXCEPT right after recreation - let it initialize naturally first
+                if self.wnck_just_recreated:
+                    logger.debug("Skipping force_update immediately after recreation")
+                    self.wnck_just_recreated = False  # Reset flag
+                else:
+                    try:
+                        self.screen_wnck.force_update()
+                    except Exception as force_update_error:
+                        # If force_update fails, Wnck state is corrupted - recreate immediately
+                        logger.error(f"force_update() failed (Wnck corruption detected): {force_update_error}")
+                        logger.info("Attempting immediate Wnck recreation due to corruption...")
+                        if self.recreate_wnck_screen():
+                            # Try one more time with fresh screen
+                            try:
+                                self.screen_wnck.force_update()
+                            except Exception as retry_error:
+                                logger.error(f"force_update() failed after recreation: {retry_error}")
+                                return windows
+                        else:
+                            logger.error("Failed to recreate Wnck screen after corruption")
+                            return windows
 
-            if not window_list:
-                return windows
-
-            for window in window_list:
+                # Get all windows from Wnck
                 try:
-                    # Validate window object is still valid
-                    if not window or window is None:
-                        continue
+                    window_list = self.screen_wnck.get_windows()
+                except Exception as get_windows_error:
+                    # If get_windows fails, Wnck state is corrupted
+                    logger.error(f"get_windows() failed (Wnck corruption detected): {get_windows_error}")
+                    return windows
 
-                    # Include normal windows, even if minimized
+                if not window_list:
+                    return windows
+
+                for window in window_list:
                     try:
-                        window_type = window.get_window_type()
-                        if window_type != Wnck.WindowType.NORMAL:
+                        # Validate window object is still valid (defensive check)
+                        if not self.window_is_valid(window):
+                            logger.debug("Window failed validation, skipping")
                             continue
-                    except Exception as type_error:
-                        logger.debug(f"get_window_type() failed: {type_error}")
-                        # Assume it's not a normal window if we can't determine type
+
+                        # Include normal windows, even if minimized
+                        try:
+                            window_type = window.get_window_type()
+                            if window_type != Wnck.WindowType.NORMAL:
+                                continue
+                        except Exception as type_error:
+                            logger.debug(f"get_window_type() failed: {type_error}")
+                            # Assume it's not a normal window if we can't determine type
+                            continue
+
+                        # Get window name (safe operation)
+                        try:
+                            window_name = window.get_name() or "Unknown"
+                        except Exception as name_error:
+                            logger.debug(f"get_name() failed: {name_error}")
+                            window_name = "Unknown"
+
+                        # IMPORTANT: Skip get_application() entirely to avoid WnckClassGroup corruption
+                        # Instead, use window name as app identifier
+                        app_name = window_name
+
+                        # Skip common system applications and our own window
+                        system_apps = [
+                            'gnome-shell', 'cinnamon', 'gnome-settings-daemon',
+                            'gnome-panel', 'mate-panel', 'xfce4-panel', 'plasma-desktop',
+                            'kwin', 'compiz', 'metacity', 'mutter', 'unity',
+                            'unity-panel-service', 'Desktop', 'Otter Window Switcher'
+                        ]
+
+                        # Skip if it's a system app or our own window
+                        if (app_name.lower() not in [app.lower() for app in system_apps] and
+                            window_name != "Otter Window Switcher" and
+                            window_name and len(window_name.strip()) > 0):
+
+                            try:
+                                is_minimized = window.is_minimized()
+                            except Exception as min_error:
+                                logger.debug(f"is_minimized() failed: {min_error}")
+                                is_minimized = False
+
+                            try:
+                                icon = window.get_icon() if window.get_icon() else None
+                            except Exception as icon_error:
+                                logger.debug(f"get_icon() failed: {icon_error}")
+                                icon = None
+
+                            # Get XID once and cache it to avoid calling get_xid() on potentially stale objects
+                            try:
+                                xid = window.get_xid()
+                            except Exception as xid_error:
+                                logger.debug(f"get_xid() failed during window collection: {xid_error}")
+                                xid = None
+
+                            windows.append({
+                                'window': window,
+                                'name': window_name,
+                                'app_name': app_name,
+                                'icon': icon,
+                                'is_minimized': is_minimized,
+                                'xid': xid  # Cache XID for MRU sorting
+                            })
+
+                    except Exception as e:
+                        logger.debug(f"Error processing window: {e}")
                         continue
 
-                    # Safe handling of application - check if it exists first
-                    # This is a HIGH-RISK area: get_application() accesses WnckClassGroup
-                    try:
-                        app = window.get_application()
-                        app_name = app.get_name() if app else "Unknown"
-                    except Exception as app_error:
-                        logger.error(f"SEGFAULT RISK: get_application() failed - possible WnckClassGroup corruption: {app_error}")
-                        app_name = "Unknown"
-                        # Consider triggering immediate Wnck recreation
-                        if "WnckClassGroup" in str(app_error) or "hash_table" in str(app_error):
-                            logger.error("CRITICAL: WnckClassGroup corruption detected, flagging for recreation")
-                            # Mark that we need recreation on next cycle
-                            self.wnck_last_recreation = 0  # Force recreation on next check
-
-                    try:
-                        window_name = window.get_name() or "Unknown"
-                    except Exception as name_error:
-                        logger.error(f"SEGFAULT RISK: get_name() failed: {name_error}")
-                        window_name = "Unknown"
-
-                    # Skip common system applications and our own window
-                    system_apps = [
-                        'gnome-shell', 'cinnamon', 'gnome-settings-daemon',
-                        'gnome-panel', 'mate-panel', 'xfce4-panel', 'plasma-desktop',
-                        'kwin', 'compiz', 'metacity', 'mutter', 'unity',
-                        'unity-panel-service', 'Desktop', 'Otter Window Switcher'
-                    ]
-
-                    # Skip if it's a system app or our own window
-                    if (app_name.lower() not in [app.lower() for app in system_apps] and
-                        window_name != "Otter Window Switcher" and
-                        window_name and len(window_name.strip()) > 0):
-
-                        try:
-                            is_minimized = window.is_minimized()
-                        except Exception as min_error:
-                            logger.debug(f"is_minimized() failed: {min_error}")
-                            is_minimized = False
-
-                        try:
-                            icon = window.get_icon() if window.get_icon() else None
-                        except Exception as icon_error:
-                            logger.debug(f"get_icon() failed: {icon_error}")
-                            icon = None
-
-                        # Get XID once and cache it to avoid calling get_xid() on potentially stale objects
-                        try:
-                            xid = window.get_xid()
-                        except Exception as xid_error:
-                            logger.debug(f"get_xid() failed during window collection: {xid_error}")
-                            xid = None
-
-                        windows.append({
-                            'window': window,
-                            'name': window_name,
-                            'app_name': app_name,
-                            'icon': icon,
-                            'is_minimized': is_minimized,
-                            'xid': xid  # Cache XID for MRU sorting
-                        })
-
-                except Exception as e:
-                    logger.debug(f"Error processing window: {e}")
-                    continue
-
-        except Exception as e:
-            logger.error(f"Error getting user windows: {e}")
-            return []
+            except Exception as e:
+                logger.error(f"Error getting user windows: {e}")
+                return []
 
         # Apply MRU ordering if --recent flag is enabled
         if self.config.get('recent', False):
@@ -1358,24 +1414,30 @@ class OtterWindowSwitcher:
     def on_window_clicked(self, button, window):
         """Handle window selection"""
         try:
+            # Validate window still exists before attempting to activate
+            if not self.window_is_valid(window):
+                logger.warning("Window is no longer valid, cannot activate")
+                return
+
             # Activate the selected window
             timestamp = Gtk.get_current_event_time()
             try:
                 window.activate(timestamp)
             except Exception as activate_error:
-                logger.error(f"SEGFAULT RISK: window.activate() failed: {activate_error}")
+                logger.error(f"Failed to activate window: {activate_error}")
                 # Check if this is Wnck corruption
                 if "Wnck" in str(activate_error) or "ClassGroup" in str(activate_error):
                     logger.error("CRITICAL: Possible Wnck corruption during activate, flagging for recreation")
                     self.wnck_last_recreation = 0
-                raise  # Re-raise to be caught by outer handler
+                return  # Don't continue on activation failure
 
             # Record MRU timestamp if --recent flag is enabled
             if self.config.get('recent', False):
                 try:
                     xid = window.get_xid()
-                    self.mru_timestamps[xid] = time.time()
-                    logger.debug(f"Updated MRU timestamp for window XID {xid}")
+                    if xid:  # Validate XID is not None
+                        self.mru_timestamps[xid] = time.time()
+                        logger.debug(f"Updated MRU timestamp for window XID {xid}")
                 except Exception as e:
                     logger.debug(f"Error recording MRU timestamp: {e}")
 
@@ -1751,15 +1813,20 @@ class OtterWindowSwitcher:
     def on_switch_to_app_workspace(self, menu_item, window):
         """Middle-click handler: if app is in current workspace, activate it; otherwise switch workspaces"""
         try:
+            # Validate window still exists
+            if not self.window_is_valid(window):
+                logger.warning("Window is no longer valid, cannot process middle-click")
+                return
+
             # Get the window's workspace
             try:
                 window_workspace = window.get_workspace()
                 if not window_workspace:
-                    logger.warning(f"Window has no workspace")
+                    logger.warning("Window has no workspace")
                     return
             except Exception as workspace_error:
-                logger.error(f"SEGFAULT RISK: get_workspace() in on_switch_to_app_workspace failed: {workspace_error}")
-                raise
+                logger.error(f"Failed to get window workspace: {workspace_error}")
+                return
 
             # Get the current active workspace
             try:
@@ -1768,24 +1835,35 @@ class OtterWindowSwitcher:
                 logger.error(f"Could not get active workspace: {e}")
                 current_workspace = None
 
-            window_name = window.get_name()
+            try:
+                window_name = window.get_name()
+            except Exception as e:
+                logger.debug(f"Could not get window name: {e}")
+                window_name = "Unknown"
 
             # Check if the window is already in the current workspace
             if current_workspace and window_workspace == current_workspace:
                 # Window is already on current workspace - just activate it
-                window.activate(Gtk.get_current_event_time())
-                logger.info(f"Window '{window_name}' is already on current workspace - brought to front")
+                try:
+                    window.activate(Gtk.get_current_event_time())
+                    logger.info(f"Window '{window_name}' is already on current workspace - brought to front")
+                except Exception as activate_error:
+                    logger.error(f"Failed to activate window: {activate_error}")
             else:
                 # Window is on a different workspace - switch to that workspace
-                window_workspace.activate(Gtk.get_current_event_time())
-                logger.info(f"Switched to workspace containing '{window_name}'")
+                try:
+                    window_workspace.activate(Gtk.get_current_event_time())
+                    logger.info(f"Switched to workspace containing '{window_name}'")
+                except Exception as workspace_activate_error:
+                    logger.error(f"Failed to activate workspace: {workspace_activate_error}")
 
             # Record MRU timestamp if --recent flag is enabled
             if self.config.get('recent', False):
                 try:
                     xid = window.get_xid()
-                    self.mru_timestamps[xid] = time.time()
-                    logger.debug(f"Updated MRU timestamp for window XID {xid} (workspace switch)")
+                    if xid:
+                        self.mru_timestamps[xid] = time.time()
+                        logger.debug(f"Updated MRU timestamp for window XID {xid} (workspace switch)")
                 except Exception as e:
                     logger.debug(f"Could not update MRU timestamp: {e}")
 
