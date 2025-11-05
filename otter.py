@@ -966,12 +966,15 @@ class OtterWindowSwitcher:
         windows = []
 
         if not self.screen_wnck:
+            logger.debug("get_user_windows: screen_wnck is None")
             return windows
 
         # If recreation is in progress, return empty list (don't touch Wnck)
         if self.wnck_recreating:
             logger.debug("Wnck recreation in progress, skipping query")
             return windows
+
+        logger.debug(f"get_user_windows: starting (Wnck age: {time.time() - self.wnck_last_recreation:.1f}s, calls: {self.wnck_call_count})")
 
         # Use lock to prevent Wnck access during other operations
         with self.wnck_lock:
@@ -1082,18 +1085,31 @@ class OtterWindowSwitcher:
                             workspace_index = None
                             workspace_name = "Unknown"
                             try:
+                                logger.debug(f"Getting workspace for window '{window_name}'")
                                 workspace = window.get_workspace()
+                                logger.debug(f"Got workspace object: {workspace}")
+
                                 if workspace:
+                                    logger.debug(f"Fetching all workspaces from Wnck screen")
                                     # Find workspace index (1-indexed for user display)
                                     all_workspaces = self.screen_wnck.get_workspaces()
+                                    logger.debug(f"Got {len(all_workspaces)} workspaces")
+
                                     for idx, ws in enumerate(all_workspaces):
+                                        logger.debug(f"Comparing workspace {idx}: {ws} == {workspace}")
                                         if ws == workspace:
+                                            logger.debug(f"Found workspace match at index {idx}")
                                             workspace_index = idx + 1  # 1-indexed
                                             workspace_name = ws.get_name()
+                                            logger.debug(f"Got workspace name: {workspace_name}")
                                             break
+                                else:
+                                    logger.debug(f"Window '{window_name}' has no workspace")
                             except Exception as ws_error:
                                 # Gracefully degrade - badge will show "?" if lookup fails
-                                logger.debug(f"Failed to get workspace info: {ws_error}")
+                                logger.warning(f"Failed to get workspace info for '{window_name}': {ws_error}")
+                                import traceback
+                                logger.debug(f"Workspace error traceback: {traceback.format_exc()}")
 
                             windows.append({
                                 'window': window,
@@ -1133,6 +1149,7 @@ class OtterWindowSwitcher:
             except Exception as e:
                 logger.debug(f"Error applying MRU sort: {e}")
 
+        logger.debug(f"get_user_windows: returning {len(windows)} windows (Wnck age: {time.time() - self.wnck_last_recreation:.1f}s)")
         return windows
 
     def create_window_thumbnail(self, window_info: Dict) -> Gtk.Widget:
@@ -1443,9 +1460,13 @@ class OtterWindowSwitcher:
 
             # Get user windows with comprehensive error handling
             try:
+                logger.debug(f"populate_windows: calling get_user_windows()")
                 self.windows_list = self.get_user_windows()
+                logger.debug(f"populate_windows: got {len(self.windows_list)} windows")
             except Exception as e:
                 logger.error(f"Error getting user windows: {e}")
+                import traceback
+                logger.debug(f"populate_windows error traceback: {traceback.format_exc()}")
                 self.windows_list = []
 
             if not self.windows_list:
@@ -1521,7 +1542,7 @@ class OtterWindowSwitcher:
         try:
             # Set lock to prevent other code from touching Wnck during recreation
             self.wnck_recreating = True
-            logger.info("Recreating Wnck screen object...")
+            logger.info(f"Recreating Wnck screen object... (call count: {self.wnck_call_count})")
 
             # Disconnect signals from old screen first
             if self.screen_wnck:
