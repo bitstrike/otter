@@ -572,15 +572,14 @@ class OtterWindowSwitcher:
         try:
             return window.get_xid()
         except Exception as xid_error:
-            # Fallback to window name + pid if XID not available
-            logger.debug(f"get_xid() failed, using fallback: {xid_error}")
+            # Fallback to window name if XID not available
+            # NOTE: DO NOT call window.get_application() - it accesses WnckClassGroup which can be corrupted
+            logger.debug(f"get_xid() failed, using window name fallback: {xid_error}")
             try:
-                app = window.get_application()
-                pid = app.get_pid() if app else 0
                 name = window.get_name() if window else "unknown"
-                return f"{name}_{pid}"
+                return f"window_{name}_{id(window)}"
             except Exception as fallback_error:
-                logger.error(f"CRITICAL: get_application() failed in get_window_id(): {fallback_error}")
+                logger.error(f"Error getting window name fallback: {fallback_error}")
                 # Last resort fallback
                 try:
                     return f"unknown_{id(window)}"
@@ -1154,63 +1153,145 @@ class OtterWindowSwitcher:
 
     def create_window_thumbnail(self, window_info: Dict) -> Gtk.Widget:
         """Create a thumbnail button for a window with workspace badge indicator"""
-        window = window_info['window']
-        name = window_info['name']
-        app_name = window_info['app_name']
-        icon = window_info['icon']
-        is_minimized = window_info.get('is_minimized', False)
-        workspace_index = window_info.get('workspace_index')  # Get workspace for badge
+        try:
+            window = window_info['window']
+            name = window_info['name']
+            app_name = window_info['app_name']
+            icon = window_info['icon']
+            is_minimized = window_info.get('is_minimized', False)
+            workspace_index = window_info.get('workspace_index')  # Get workspace for badge
 
-        # Create main button
-        button = Gtk.Button()
-        button.get_style_context().add_class("window-button")
-        if is_minimized:
-            button.get_style_context().add_class("minimized-window-button")
-        button.set_relief(Gtk.ReliefStyle.NONE)
+            # CRITICAL: Verify window object is still valid before creating thumbnail
+            # A window may have been closed between when we retrieved it and now
+            if not self.window_is_valid(window):
+                logger.warning(f"Window object became invalid (likely closed): {name}")
+                raise ValueError(f"Window object invalid for '{name}'")
 
-        # Create vertical box for content
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+            # Create main button
+            button = Gtk.Button()
+            button.get_style_context().add_class("window-button")
+            if is_minimized:
+                button.get_style_context().add_class("minimized-window-button")
+            button.set_relief(Gtk.ReliefStyle.NONE)
 
-        # Try to get window screenshot/thumbnail with workspace badge overlay
-        thumbnail = self.get_window_thumbnail_with_badge(window, workspace_index)
-        if thumbnail:
-            vbox.pack_start(thumbnail, False, False, 0)
-        elif icon:
-            # Use window icon if available
-            icon_image = Gtk.Image()
-            icon_image.set_from_pixbuf(icon)
-            icon_image.set_pixel_size(48)
-            vbox.pack_start(icon_image, False, False, 0)
-        else:
-            # Use default icon
-            icon_image = Gtk.Image()
-            icon_image.set_from_icon_name("application-x-executable", Gtk.IconSize.LARGE_TOOLBAR)
-            vbox.pack_start(icon_image, False, False, 0)
+            # Create vertical box for content
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
 
-        # Add window name label
-        label = Gtk.Label()
-        # Truncate long names
-        display_name = name[:25] + "..." if len(name) > 25 else name
-        label.set_markup(f"<span size='small'>{display_name}</span>")
-        label.set_line_wrap(True)
-        label.set_max_width_chars(20)
-        vbox.pack_start(label, False, False, 0)
+            # Try to get window screenshot/thumbnail with workspace badge overlay
+            # This call may also fail if window closes between now and the call
+            try:
+                thumbnail = self.get_window_thumbnail_with_badge(window, workspace_index)
+            except Exception as thumb_error:
+                logger.debug(f"Failed to get thumbnail for '{name}': {thumb_error}")
+                thumbnail = None
 
-        # Add app name if different from window name
-        if app_name and app_name != name:
-            app_label = Gtk.Label()
-            app_label.set_markup(f"<span size='x-small' alpha='70%'>{app_name}</span>")
-            vbox.pack_start(app_label, False, False, 0)
+            if thumbnail:
+                vbox.pack_start(thumbnail, False, False, 0)
+            elif icon:
+                # Use window icon if available
+                try:
+                    icon_image = Gtk.Image()
+                    icon_image.set_from_pixbuf(icon)
+                    icon_image.set_pixel_size(48)
+                    vbox.pack_start(icon_image, False, False, 0)
+                except Exception as icon_error:
+                    logger.debug(f"Failed to display icon for '{name}': {icon_error}")
+                    # Fall through to default icon
+                    icon_image = Gtk.Image()
+                    icon_image.set_from_icon_name("application-x-executable", Gtk.IconSize.LARGE_TOOLBAR)
+                    vbox.pack_start(icon_image, False, False, 0)
+            else:
+                # Use default icon
+                icon_image = Gtk.Image()
+                icon_image.set_from_icon_name("application-x-executable", Gtk.IconSize.LARGE_TOOLBAR)
+                vbox.pack_start(icon_image, False, False, 0)
 
-        button.add(vbox)
+            # Add window name label
+            label = Gtk.Label()
+            # Truncate long names
+            display_name = name[:25] + "..." if len(name) > 25 else name
+            label.set_markup(f"<span size='small'>{display_name}</span>")
+            label.set_line_wrap(True)
+            label.set_max_width_chars(20)
+            vbox.pack_start(label, False, False, 0)
 
-        # Connect click event
-        button.connect("clicked", self.on_window_clicked, window)
-        button.connect("button-press-event", self.on_button_press_event, window)
+            # Add app name if different from window name
+            if app_name and app_name != name:
+                app_label = Gtk.Label()
+                app_label.set_markup(f"<span size='x-small' alpha='70%'>{app_name}</span>")
+                vbox.pack_start(app_label, False, False, 0)
 
-        return button
+            button.add(vbox)
 
+            # Connect click event - wrap window in callbacks with validation
+            button.connect("clicked", self.on_window_clicked, window)
+            button.connect("button-press-event", self.on_button_press_event, window)
 
+            return button
+
+        except Exception as e:
+            logger.error(f"Error creating window thumbnail: {e}")
+            import traceback
+            logger.debug(f"Thumbnail creation error traceback: {traceback.format_exc()}")
+            # Return a fallback button that gracefully handles the closed window
+            return self.create_fallback_button(window_info)
+
+    def create_fallback_button(self, window_info: Dict) -> Gtk.Widget:
+        """Create a fallback button when the window becomes invalid or closed.
+
+        This gracefully handles windows that were closed between when they were
+        retrieved and when the thumbnail was being created.
+        """
+        try:
+            name = window_info.get('name', 'Unknown Window')
+            app_name = window_info.get('app_name', 'Unknown App')
+            icon = window_info.get('icon')
+
+            # Create main button
+            button = Gtk.Button()
+            button.get_style_context().add_class("window-button")
+            button.set_relief(Gtk.ReliefStyle.NONE)
+            button.set_sensitive(False)  # Disable since window is gone
+
+            # Create vertical box for content
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+
+            # Try to show icon
+            if icon:
+                try:
+                    icon_image = Gtk.Image()
+                    icon_image.set_from_pixbuf(icon)
+                    icon_image.set_pixel_size(48)
+                    vbox.pack_start(icon_image, False, False, 0)
+                except Exception:
+                    # Fall through to default icon
+                    icon_image = Gtk.Image()
+                    icon_image.set_from_icon_name("application-x-executable", Gtk.IconSize.LARGE_TOOLBAR)
+                    vbox.pack_start(icon_image, False, False, 0)
+            else:
+                # Use default icon
+                icon_image = Gtk.Image()
+                icon_image.set_from_icon_name("application-x-executable", Gtk.IconSize.LARGE_TOOLBAR)
+                vbox.pack_start(icon_image, False, False, 0)
+
+            # Add window name label
+            label = Gtk.Label()
+            display_name = name[:25] + "..." if len(name) > 25 else name
+            # Show that window is closed/unavailable
+            label.set_markup(f"<span size='small' alpha='50%'>{display_name}\n(closed)</span>")
+            label.set_line_wrap(True)
+            label.set_max_width_chars(20)
+            vbox.pack_start(label, False, False, 0)
+
+            button.add(vbox)
+            return button
+
+        except Exception as fallback_error:
+            logger.error(f"Error creating fallback button: {fallback_error}")
+            # Last resort: return a simple disabled button
+            button = Gtk.Button(label="Unavailable")
+            button.set_sensitive(False)
+            return button
 
     def get_window_thumbnail(self, window) -> Optional[Gtk.Widget]:
         """Get a thumbnail image of the window"""
@@ -1281,6 +1362,12 @@ class OtterWindowSwitcher:
         badge. The badge is pass-through so clicks pass to activate window.
         """
         try:
+            # CRITICAL: Verify window is still valid before accessing it
+            # The window may have been closed between retrieval and now
+            if not self.window_is_valid(window):
+                logger.debug("Window became invalid while creating thumbnail with badge")
+                raise ValueError("Window object is no longer valid")
+
             window_id = self.get_window_id(window)
             cached_screenshot = self.screenshot_cache.get(window_id)
 
@@ -1737,19 +1824,29 @@ class OtterWindowSwitcher:
         try:
             # Validate window still exists before attempting to activate
             if not self.window_is_valid(window):
-                logger.warning("Window is no longer valid, cannot activate")
+                logger.warning("Window is no longer valid, cannot activate (was likely closed)")
                 return
 
             # Activate the selected window
             timestamp = Gtk.get_current_event_time()
             try:
+                # CRITICAL: Catch segfaults that may occur if window object is stale
+                # This can happen if the window closed at the exact moment of clicking
                 window.activate(timestamp)
+                logger.debug("Window activated successfully")
+
             except Exception as activate_error:
+                error_str = str(activate_error)
                 logger.error(f"Failed to activate window: {activate_error}")
-                # Check if this is Wnck corruption
-                if "Wnck" in str(activate_error) or "ClassGroup" in str(activate_error):
-                    logger.error("CRITICAL: Possible Wnck corruption during activate, flagging for recreation")
+
+                # Check if this is Wnck corruption (the primary cause of segfaults)
+                if any(term in error_str for term in ["Wnck", "ClassGroup", "g_hash_table", "unclassed"]):
+                    logger.error("CRITICAL: Wnck corruption detected during window activation, flagging for immediate recreation")
                     self.wnck_last_recreation = 0
+                    return
+
+                # For other errors, just log and continue
+                logger.debug(f"Window activation failed (window may have closed): {activate_error}")
                 return  # Don't continue on activation failure
 
             # Record MRU timestamp if --recent flag is enabled
@@ -1765,8 +1862,11 @@ class OtterWindowSwitcher:
             # Mark that a window was clicked - don't hide immediately
             # The window will be hidden when mouse leaves (respecting --delay)
             self.window_clicked = True
+
         except Exception as e:
             logger.error(f"Error in on_window_clicked handler: {e}")
+            import traceback
+            logger.debug(f"on_window_clicked error traceback: {traceback.format_exc()}")
 
     def grab_keyboard_focus(self):
         """Ensure window has keyboard focus"""
@@ -1947,20 +2047,40 @@ class OtterWindowSwitcher:
 
     def on_button_press_event(self, button, event, window):
         """Handle button press events for context menu and middle-click"""
-        if event.type == Gdk.EventType.BUTTON_PRESS:
-            if event.button == 2:  # Middle-click
-                # Enable middle-click mode to keep otter visible
-                self._middle_click_mode = True
-                self.window_clicked = False  # Prevents normal hide behavior on click
-                self.on_switch_to_app_workspace(None, window)
-                # Schedule otter to reappear if workspace switched
-                # This ensures otter is visible on the new workspace
-                GLib.timeout_add(200, self._redisplay_otter_after_workspace_switch)
-                return True
-            elif event.button == 3:  # Right-click
-                self.show_context_menu(button, window)
-                return True
-        return False
+        try:
+            # Validate window is still valid before handling button press
+            if not self.window_is_valid(window):
+                logger.warning("Window became invalid during button press event")
+                return False
+
+            if event.type == Gdk.EventType.BUTTON_PRESS:
+                if event.button == 2:  # Middle-click
+                    try:
+                        # Enable middle-click mode to keep otter visible
+                        self._middle_click_mode = True
+                        self.window_clicked = False  # Prevents normal hide behavior on click
+                        self.on_switch_to_app_workspace(None, window)
+                        # Schedule otter to reappear if workspace switched
+                        # This ensures otter is visible on the new workspace
+                        GLib.timeout_add(200, self._redisplay_otter_after_workspace_switch)
+                        return True
+                    except Exception as middle_click_error:
+                        logger.error(f"Error handling middle-click: {middle_click_error}")
+                        return False
+
+                elif event.button == 3:  # Right-click
+                    try:
+                        self.show_context_menu(button, window)
+                        return True
+                    except Exception as context_menu_error:
+                        logger.error(f"Error showing context menu: {context_menu_error}")
+                        return False
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Error in on_button_press_event: {e}")
+            return False
 
     def show_context_menu(self, widget, window):
         """Show context menu for window operations"""
