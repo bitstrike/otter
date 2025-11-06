@@ -240,6 +240,42 @@ class OtterWindowSwitcher:
             logger.debug(f"Window validation failed: {e}")
             return False
 
+    def get_window_by_xid(self, xid: int) -> Optional:
+        """Look up a window object by its XID (X11 window ID).
+
+        This is critical for safely resolving window references that may have
+        been stale since the time they were captured. Always prefer XID-based
+        lookups over storing window object references.
+
+        Args:
+            xid: The X11 window ID to look up
+
+        Returns:
+            The current window object if it exists and is valid, None otherwise
+        """
+        if not xid or not self.screen_wnck:
+            return None
+
+        try:
+            # Get current window list with lock protection
+            with self.wnck_lock:
+                if not self.screen_wnck:
+                    return None
+
+                current_windows = self.get_user_windows()
+                for window_info in current_windows:
+                    window = window_info.get('window')
+                    if window and self.window_is_valid(window):
+                        try:
+                            if window.get_xid() == xid:
+                                return window
+                        except Exception:
+                            continue
+            return None
+        except Exception as e:
+            logger.debug(f"Error looking up window by XID {xid}: {e}")
+            return None
+
     def calculate_layout_dimensions(self, window_count):
         """Calculate the missing dimension (rows or columns) based on window count"""
         if self.config['nrows'] is not None:
@@ -553,14 +589,26 @@ class OtterWindowSwitcher:
             for window_info in current_windows:
                 try:
                     window = window_info['window']
+
+                    # CRITICAL FIX: Validate window before attempting to capture screenshot
+                    # Windows can close between get_user_windows() and capture_high_quality_screenshot()
+                    if not self.window_is_valid(window):
+                        logger.debug("Window became invalid before screenshot capture, skipping")
+                        continue
+
                     window_id = self.get_window_id(window)
 
-                    # Capture screenshot
-                    screenshot = self.capture_high_quality_screenshot(window)
-                    if screenshot:
-                        self.screenshot_cache[window_id] = screenshot
+                    # Capture screenshot with additional validation
+                    try:
+                        # Re-validate window object is still good after getting its ID
+                        if self.window_is_valid(window):
+                            screenshot = self.capture_high_quality_screenshot(window)
+                            if screenshot:
+                                self.screenshot_cache[window_id] = screenshot
+                    except Exception as capture_error:
+                        logger.debug(f"Error capturing screenshot for window {window_id}: {capture_error}")
                 except Exception as e:
-                    logger.debug(f"Error capturing screenshot for window: {e}")
+                    logger.debug(f"Error processing window for screenshot: {e}")
 
         except Exception as e:
             logger.error(f"Error updating screenshot cache: {e}")
@@ -586,52 +634,74 @@ class OtterWindowSwitcher:
                 except:
                     return "unknown_window"
 
-    # Update the capture_high_quality_screenshot method:
     def capture_high_quality_screenshot(self, window):
-        """Capture high-quality screenshot, handling minimized windows."""
+        """Capture high-quality screenshot, handling minimized windows.
+
+        CRITICAL FIX: Validates window before attempting capture operations,
+        as windows can be closed at any point during the capture process.
+        """
         try:
+            # CRITICAL FIX: Validate window object before calling any methods on it
+            if not self.window_is_valid(window):
+                logger.debug("Window became invalid during screenshot capture")
+                return None
+
             window_id = self.get_window_id(window)
-            
+
+            # Check if window is minimized with validation
+            try:
+                is_minimized = window.is_minimized() if self.window_is_valid(window) else True
+            except Exception as e:
+                logger.debug(f"Could not check minimized status: {e}")
+                is_minimized = True
+
             # If window is minimized, use last known valid screenshot
-            if window.is_minimized():
+            if is_minimized:
                 if window_id in self.last_valid_screenshots:
                     return self.last_valid_screenshots[window_id]
                 else:
                     # No valid screenshot available, return None to use icon
                     return None
-            
-            # Try to capture screenshot for non-minimized windows
-            isolated_pixbuf = self.capture_isolated_window(window)
-            if isolated_pixbuf:
-                scaled = self.scale_pixbuf_high_quality(isolated_pixbuf)
-                if scaled:
-                    # Store as last valid screenshot
-                    self.last_valid_screenshots[window_id] = scaled
-                    return scaled
 
-            raised_pixbuf = self.capture_with_temporary_raise(window)
-            if raised_pixbuf:
-                scaled = self.scale_pixbuf_high_quality(raised_pixbuf)
-                if scaled:
-                    self.last_valid_screenshots[window_id] = scaled
-                    return scaled
+            # Try to capture screenshot for non-minimized windows
+            # Re-validate before each capture attempt
+            if self.window_is_valid(window):
+                isolated_pixbuf = self.capture_isolated_window(window)
+                if isolated_pixbuf:
+                    scaled = self.scale_pixbuf_high_quality(isolated_pixbuf)
+                    if scaled:
+                        # Store as last valid screenshot
+                        self.last_valid_screenshots[window_id] = scaled
+                        return scaled
+
+            if self.window_is_valid(window):
+                raised_pixbuf = self.capture_with_temporary_raise(window)
+                if raised_pixbuf:
+                    scaled = self.scale_pixbuf_high_quality(raised_pixbuf)
+                    if scaled:
+                        self.last_valid_screenshots[window_id] = scaled
+                        return scaled
 
             # Fallback to screen area capture
-            screen_pixbuf = self.capture_screen_area(window)
-            if screen_pixbuf:
-                self.last_valid_screenshots[window_id] = screen_pixbuf
-                return screen_pixbuf
-                
+            if self.window_is_valid(window):
+                screen_pixbuf = self.capture_screen_area(window)
+                if screen_pixbuf:
+                    self.last_valid_screenshots[window_id] = screen_pixbuf
+                    return screen_pixbuf
+
             # If all fails and we have a cached screenshot, use it
             if window_id in self.last_valid_screenshots:
                 return self.last_valid_screenshots[window_id]
 
         except Exception as e:
-            logger.error(f"Error capturing screenshot: {e}")
+            logger.debug(f"Error capturing screenshot: {e}")
             # Try to return cached screenshot on error
-            window_id = self.get_window_id(window)
-            if window_id in self.last_valid_screenshots:
-                return self.last_valid_screenshots[window_id]
+            try:
+                window_id = self.get_window_id(window)
+                if window_id in self.last_valid_screenshots:
+                    return self.last_valid_screenshots[window_id]
+            except Exception:
+                pass
 
         return None
 
@@ -1223,9 +1293,18 @@ class OtterWindowSwitcher:
 
             button.add(vbox)
 
-            # Connect click event - wrap window in callbacks with validation
-            button.connect("clicked", self.on_window_clicked, window)
-            button.connect("button-press-event", self.on_button_press_event, window)
+            # CRITICAL FIX: Pass XID instead of window object to avoid stale references
+            # Window objects can become invalid between button creation and activation,
+            # causing segfaults. XID-based lookups resolve to current window state.
+            try:
+                xid = window.get_xid()
+                button.connect("clicked", self.on_window_clicked, xid)
+                button.connect("button-press-event", self.on_button_press_event, xid)
+            except Exception as e:
+                logger.error(f"Error getting XID for window, using fallback: {e}")
+                # Fallback to direct window object if XID fails
+                button.connect("clicked", self.on_window_clicked, window)
+                button.connect("button-press-event", self.on_button_press_event, window)
 
             return button
 
@@ -1704,12 +1783,34 @@ class OtterWindowSwitcher:
             return False
 
     def show_window(self):
-        """Show the window switcher"""
+        """Show the window switcher.
+
+        CRITICAL FIX: Validates that application information is current
+        before displaying windows, ensuring no stale window references are shown.
+        """
         if not self.is_visible and self.window:
             # Reset the clicked flag when showing the window
             self.window_clicked = False
 
+            # CRITICAL FIX: Verify Wnck state is valid before populating windows
+            # This ensures we have accurate information about running applications
+            # when otter appears at the screen edge
+            try:
+                with self.wnck_lock:
+                    # Check if we need to recreate Wnck screen due to stale state
+                    if self.screen_wnck:
+                        # Do a quick force_update to sync Wnck state
+                        try:
+                            self.screen_wnck.force_update()
+                        except Exception as update_error:
+                            logger.debug(f"Wnck force_update failed when showing window: {update_error}")
+                            # If force_update fails, this may indicate corruption
+                            # The next populate_windows call will trigger recreation if needed
+            except Exception as e:
+                logger.debug(f"Error validating Wnck state when showing window: {e}")
+
             # Populate windows first to ensure final window size
+            # This will now have the most current window information
             self.populate_windows()
 
             # Show window to get its final size
@@ -1819,25 +1920,51 @@ class OtterWindowSwitcher:
             self.is_visible = False
         return False  # Don't repeat
 
-    def on_window_clicked(self, button, window):
-        """Handle window selection"""
-        try:
-            # Validate window still exists before attempting to activate
-            if not self.window_is_valid(window):
-                logger.warning("Window is no longer valid, cannot activate (was likely closed)")
-                return
+    def on_window_clicked(self, button, window_ref):
+        """Handle window selection.
 
-            # Activate the selected window
+        Args:
+            button: GTK button widget that was clicked
+            window_ref: Either an XID (int) or window object for fallback compatibility
+        """
+        try:
+            # CRITICAL FIX: Handle both XID-based lookups (preferred) and direct window objects (fallback)
+            window = None
+            xid = None
+
+            if isinstance(window_ref, int):
+                # XID-based lookup (preferred path)
+                xid = window_ref
+                window = self.get_window_by_xid(xid)
+                if not window:
+                    logger.warning(f"Window with XID {xid} no longer exists (was closed)")
+                    return
+            else:
+                # Fallback: direct window object
+                window = window_ref
+                if not self.window_is_valid(window):
+                    logger.warning("Window is no longer valid, cannot activate (was likely closed)")
+                    return
+                try:
+                    xid = window.get_xid()
+                except Exception:
+                    xid = None
+
+            # Activate the selected window with double validation
             timestamp = Gtk.get_current_event_time()
             try:
                 # CRITICAL: Catch segfaults that may occur if window object is stale
                 # This can happen if the window closed at the exact moment of clicking
+                if not self.window_is_valid(window):
+                    logger.warning("Window validation failed just before activation")
+                    return
+
                 window.activate(timestamp)
-                logger.debug("Window activated successfully")
+                logger.debug(f"Window XID {xid} activated successfully")
 
             except Exception as activate_error:
                 error_str = str(activate_error)
-                logger.error(f"Failed to activate window: {activate_error}")
+                logger.error(f"Failed to activate window XID {xid}: {activate_error}")
 
                 # Check if this is Wnck corruption (the primary cause of segfaults)
                 if any(term in error_str for term in ["Wnck", "ClassGroup", "g_hash_table", "unclassed"]):
@@ -1850,12 +1977,10 @@ class OtterWindowSwitcher:
                 return  # Don't continue on activation failure
 
             # Record MRU timestamp if --recent flag is enabled
-            if self.config.get('recent', False):
+            if self.config.get('recent', False) and xid:
                 try:
-                    xid = window.get_xid()
-                    if xid:  # Validate XID is not None
-                        self.mru_timestamps[xid] = time.time()
-                        logger.debug(f"Updated MRU timestamp for window XID {xid}")
+                    self.mru_timestamps[xid] = time.time()
+                    logger.debug(f"Updated MRU timestamp for window XID {xid}")
                 except Exception as e:
                     logger.debug(f"Error recording MRU timestamp: {e}")
 
@@ -2045,13 +2170,36 @@ class OtterWindowSwitcher:
         self.cleanup()
         Gtk.main_quit()
 
-    def on_button_press_event(self, button, event, window):
-        """Handle button press events for context menu and middle-click"""
+    def on_button_press_event(self, button, event, window_ref):
+        """Handle button press events for context menu and middle-click.
+
+        Args:
+            button: GTK button widget
+            event: Gdk event
+            window_ref: Either an XID (int) or window object for fallback compatibility
+        """
         try:
-            # Validate window is still valid before handling button press
-            if not self.window_is_valid(window):
-                logger.warning("Window became invalid during button press event")
-                return False
+            # CRITICAL FIX: Handle both XID-based lookups (preferred) and direct window objects (fallback)
+            window = None
+            xid = None
+
+            if isinstance(window_ref, int):
+                # XID-based lookup (preferred path)
+                xid = window_ref
+                window = self.get_window_by_xid(xid)
+                if not window:
+                    logger.warning(f"Window with XID {xid} no longer exists (was closed)")
+                    return False
+            else:
+                # Fallback: direct window object
+                window = window_ref
+                if not self.window_is_valid(window):
+                    logger.warning("Window became invalid during button press event")
+                    return False
+                try:
+                    xid = window.get_xid()
+                except Exception:
+                    xid = None
 
             if event.type == Gdk.EventType.BUTTON_PRESS:
                 if event.button == 2:  # Middle-click
@@ -2059,7 +2207,7 @@ class OtterWindowSwitcher:
                         # Enable middle-click mode to keep otter visible
                         self._middle_click_mode = True
                         self.window_clicked = False  # Prevents normal hide behavior on click
-                        self.on_switch_to_app_workspace(None, window)
+                        self.on_switch_to_app_workspace(None, xid)
                         # Schedule otter to reappear if workspace switched
                         # This ensures otter is visible on the new workspace
                         GLib.timeout_add(200, self._redisplay_otter_after_workspace_switch)
@@ -2070,7 +2218,7 @@ class OtterWindowSwitcher:
 
                 elif event.button == 3:  # Right-click
                     try:
-                        self.show_context_menu(button, window)
+                        self.show_context_menu(button, xid)
                         return True
                     except Exception as context_menu_error:
                         logger.error(f"Error showing context menu: {context_menu_error}")
@@ -2082,8 +2230,17 @@ class OtterWindowSwitcher:
             logger.error(f"Error in on_button_press_event: {e}")
             return False
 
-    def show_context_menu(self, widget, window):
-        """Show context menu for window operations"""
+    def show_context_menu(self, widget, window_xid):
+        """Show context menu for window operations.
+
+        CRITICAL FIX: Uses XID-based lookups and workspace indices instead of
+        storing objects in closures. This prevents segfaults from accessing
+        stale Wnck objects.
+
+        Args:
+            widget: GTK widget that triggered the menu
+            window_xid: X11 window ID (XID) of the target window
+        """
         menu = Gtk.Menu()
 
         # Set HIDE_STATE semaphore to False to prevent window from hiding while menu is open
@@ -2103,30 +2260,42 @@ class OtterWindowSwitcher:
         switch_to_workspace_item = Gtk.MenuItem(label="Go to app's workspace")
         move_to_workspace_item = Gtk.MenuItem(label="Move to workspace")
 
-        # Create submenu for workspaces
+        # Create submenu for workspaces - with lock protection
         workspace_submenu = Gtk.Menu()
+        workspace_indices = []
 
-        # Get available workspaces
-        workspaces = self.screen_wnck.get_workspaces()
-        for i, workspace in enumerate(workspaces):
-            workspace_item = Gtk.MenuItem(label=f"Workspace {i + 1}")
-            workspace_item.connect("activate", self.on_move_to_workspace, window, workspace)
-            workspace_submenu.append(workspace_item)
+        try:
+            # CRITICAL FIX: Acquire lock before accessing screen_wnck
+            with self.wnck_lock:
+                if not self.screen_wnck:
+                    logger.warning("Screen Wnck not available for context menu")
+                    return
+
+                workspaces = self.screen_wnck.get_workspaces()
+                workspace_indices = list(range(len(workspaces)))
+
+                for i in workspace_indices:
+                    workspace_item = Gtk.MenuItem(label=f"Workspace {i + 1}")
+                    # CRITICAL FIX: Pass workspace INDEX instead of object
+                    workspace_item.connect("activate", self.on_move_to_workspace, window_xid, i)
+                    workspace_submenu.append(workspace_item)
+        except Exception as e:
+            logger.error(f"Error creating workspace submenu: {e}")
 
         move_to_workspace_item.set_submenu(workspace_submenu)
 
-        # Connect menu item signals
-        move_to_display_item.connect("activate", self.on_move_to_display, window)
-        resize_to_display_item.connect("activate", self.on_resize_to_display, window)
-        minimize_item.connect("activate", self.on_minimize_app, window)
-        maximize_item.connect("activate", self.on_maximize_app, window)
-        switch_to_item.connect("activate", self.on_switch_to_app, window)
-        switch_to_workspace_item.connect("activate", self.on_switch_to_app_workspace, window)
+        # Connect menu item signals - pass XID instead of window object
+        move_to_display_item.connect("activate", self.on_move_to_display, window_xid)
+        resize_to_display_item.connect("activate", self.on_resize_to_display, window_xid)
+        minimize_item.connect("activate", self.on_minimize_app, window_xid)
+        maximize_item.connect("activate", self.on_maximize_app, window_xid)
+        switch_to_item.connect("activate", self.on_switch_to_app, window_xid)
+        switch_to_workspace_item.connect("activate", self.on_switch_to_app_workspace, window_xid)
 
         # drag application
         drag_app_item = Gtk.MenuItem(label="Drag app")
-        drag_app_item.connect("activate", self.on_drag_app, window)
-        
+        drag_app_item.connect("activate", self.on_drag_app, window_xid)
+
         # Add menu items to menu
         menu.append(move_to_display_item)
         menu.append(resize_to_display_item)
@@ -2147,16 +2316,33 @@ class OtterWindowSwitcher:
         self.HIDE_STATE = True
         logger.debug("Context menu closed, HIDE_STATE set to True")
 
-    # Replace the on_move_to_display method:
-    def on_move_to_display(self, menu_item, window):
-        """Move app to current display and workspace."""
+    def on_move_to_display(self, menu_item, window_xid):
+        """Move app to current display and workspace.
+
+        CRITICAL FIX: Looks up window by XID at activation time to ensure
+        we have the current valid window object, not a stale reference.
+        """
         try:
-            # Get current workspace
-            active_workspace = self.screen_wnck.get_active_workspace()
-            
-            # Move window to current workspace
-            if active_workspace:
-                window.move_to_workspace(active_workspace)
+            # Look up window by XID at activation time
+            window = self.get_window_by_xid(window_xid)
+            if not window:
+                logger.warning(f"Window with XID {window_xid} no longer exists")
+                return
+
+            # Get current workspace with lock protection
+            with self.wnck_lock:
+                if not self.screen_wnck:
+                    logger.error("Screen Wnck not available")
+                    return
+
+                active_workspace = self.screen_wnck.get_active_workspace()
+
+                # Move window to current workspace
+                if active_workspace and self.window_is_valid(window):
+                    try:
+                        window.move_to_workspace(active_workspace)
+                    except Exception as ws_error:
+                        logger.debug(f"Could not move window to workspace: {ws_error}")
 
             # Get current display geometry
             display = Gdk.Display.get_default()
@@ -2167,23 +2353,38 @@ class OtterWindowSwitcher:
             geometry = monitor.get_geometry()
 
             # Use set_geometry instead of move()
-            current_geom = window.get_geometry()
-            window.set_geometry(
-                Wnck.WindowGravity.CURRENT,
-                Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y,
-                geometry.x + 50, geometry.y + 50,  # Offset from edge
-                current_geom.width, current_geom.height
-            )
+            if self.window_is_valid(window):
+                try:
+                    current_geom = window.get_geometry()
+                    window.set_geometry(
+                        Wnck.WindowGravity.CURRENT,
+                        Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y,
+                        geometry.x + 50, geometry.y + 50,  # Offset from edge
+                        current_geom.width, current_geom.height
+                    )
+                except Exception as geom_error:
+                    logger.debug(f"Could not set window geometry: {geom_error}")
 
         except Exception as e:
             logger.error(f"Error moving app to current display: {e}")
             
 
-    # Fix 2: Fix WindowMoveResizeMask attribute error
-    # Replace the on_resize_to_display method:
-    def on_resize_to_display(self, menu_item, window):
-        """Resize app to current display."""
+    def on_resize_to_display(self, menu_item, window_xid):
+        """Resize app to current display.
+
+        CRITICAL FIX: Looks up window by XID at activation time.
+        """
         try:
+            # Look up window by XID at activation time
+            window = self.get_window_by_xid(window_xid)
+            if not window:
+                logger.warning(f"Window with XID {window_xid} no longer exists")
+                return
+
+            if not self.window_is_valid(window):
+                logger.warning(f"Window with XID {window_xid} is not valid")
+                return
+
             # Get current display geometry
             display = Gdk.Display.get_default()
             seat = display.get_default_seat()
@@ -2195,7 +2396,7 @@ class OtterWindowSwitcher:
             # Use proper Wnck constants
             window.set_geometry(
                 Wnck.WindowGravity.CURRENT,
-                Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y | 
+                Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y |
                 Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
                 geometry.x, geometry.y,
                 geometry.width, geometry.height
@@ -2204,135 +2405,276 @@ class OtterWindowSwitcher:
         except Exception as e:
             logger.error(f"Error resizing app to current display: {e}")
 
-    def on_minimize_app(self, menu_item, window):
-        """Minimize the application"""
+    def on_minimize_app(self, menu_item, window_xid):
+        """Minimize the application.
+
+        CRITICAL FIX: Looks up window by XID at activation time.
+        """
         try:
-            window.minimize()
+            # Look up window by XID at activation time
+            window = self.get_window_by_xid(window_xid)
+            if not window:
+                logger.warning(f"Window with XID {window_xid} no longer exists")
+                return
+
+            if self.window_is_valid(window):
+                window.minimize()
         except Exception as e:
             logger.error(f"Error minimizing app: {e}")
 
-    def on_maximize_app(self, menu_item, window):
-        """Maximize the application"""
+    def on_maximize_app(self, menu_item, window_xid):
+        """Maximize the application.
+
+        CRITICAL FIX: Looks up window by XID at activation time.
+        """
         try:
-            if window.is_maximized():
-                window.unmaximize()
-            else:
-                window.maximize()
+            # Look up window by XID at activation time
+            window = self.get_window_by_xid(window_xid)
+            if not window:
+                logger.warning(f"Window with XID {window_xid} no longer exists")
+                return
+
+            if self.window_is_valid(window):
+                if window.is_maximized():
+                    window.unmaximize()
+                else:
+                    window.maximize()
         except Exception as e:
             logger.error(f"Error maximizing app: {e}")
 
-    def on_switch_to_app(self, menu_item, window):
-        """Switch to the application's workspace and display"""
+    def on_switch_to_app(self, menu_item, window_xid):
+        """Switch to the application's workspace and display.
+
+        CRITICAL FIX: Looks up window by XID at activation time to ensure
+        we have the current valid window object.
+        """
         try:
+            # Look up window by XID at activation time
+            window = self.get_window_by_xid(window_xid)
+            if not window:
+                logger.warning(f"Window with XID {window_xid} no longer exists")
+                return
+
             # Activate the window's workspace
             try:
-                workspace = window.get_workspace()
-                if workspace:
-                    workspace.activate(Gtk.get_current_event_time())
+                if self.window_is_valid(window):
+                    workspace = window.get_workspace()
+                    if workspace:
+                        workspace.activate(Gtk.get_current_event_time())
             except Exception as workspace_error:
-                logger.error(f"SEGFAULT RISK: get_workspace()/activate() failed: {workspace_error}")
+                logger.debug(f"Could not switch to window's workspace: {workspace_error}")
 
             # Activate the window
             try:
-                window.activate(Gtk.get_current_event_time())
+                if self.window_is_valid(window):
+                    window.activate(Gtk.get_current_event_time())
+                    logger.debug(f"Window XID {window_xid} activated")
             except Exception as activate_error:
-                logger.error(f"SEGFAULT RISK: window.activate() in on_switch_to_app failed: {activate_error}")
-                raise
+                logger.error(f"Failed to activate window XID {window_xid}: {activate_error}")
 
             # Record MRU timestamp if --recent flag is enabled
-            if self.config.get('recent', False):
+            if self.config.get('recent', False) and window_xid:
                 try:
-                    xid = window.get_xid()
-                    self.mru_timestamps[xid] = time.time()
-                    logger.debug(f"Updated MRU timestamp for window XID {xid}")
+                    self.mru_timestamps[window_xid] = time.time()
+                    logger.debug(f"Updated MRU timestamp for window XID {window_xid}")
                 except Exception as e:
                     logger.debug(f"Error recording MRU timestamp: {e}")
 
         except Exception as e:
             logger.error(f"Error switching to app: {e}")
 
-    def on_switch_to_app_workspace(self, menu_item, window):
-        """Middle-click handler: if app is in current workspace, activate it; otherwise switch workspaces"""
+    def on_switch_to_app_workspace(self, menu_item, window_xid):
+        """Middle-click handler: if app is in current workspace, activate it; otherwise switch workspaces.
+
+        CRITICAL FIX: Looks up window by XID and workspace by index at activation time
+        to ensure we have current valid objects, not stale references.
+        """
         try:
-            # Validate window still exists
+            # Look up window by XID at activation time
+            window = self.get_window_by_xid(window_xid)
+            if not window:
+                logger.warning(f"Window with XID {window_xid} no longer exists")
+                return
+
+            # Validate window
             if not self.window_is_valid(window):
                 logger.warning("Window is no longer valid, cannot process middle-click")
                 return
 
-            # Get the window's workspace
+            # Get window name for logging
             try:
-                window_workspace = window.get_workspace()
-                if not window_workspace:
-                    logger.warning("Window has no workspace")
-                    return
-            except Exception as workspace_error:
-                logger.error(f"Failed to get window workspace: {workspace_error}")
-                return
-
-            # Get the current active workspace
-            try:
-                current_workspace = self.screen_wnck.get_active_workspace()
-            except Exception as e:
-                logger.error(f"Could not get active workspace: {e}")
-                current_workspace = None
-
-            try:
-                window_name = window.get_name()
+                window_name = window.get_name() if self.window_is_valid(window) else "Unknown"
             except Exception as e:
                 logger.debug(f"Could not get window name: {e}")
                 window_name = "Unknown"
 
+            # Get the window's workspace index
+            window_workspace_index = None
+            try:
+                if self.window_is_valid(window):
+                    window_workspace = window.get_workspace()
+                    if window_workspace:
+                        # Find the workspace index by comparing with screen workspaces
+                        with self.wnck_lock:
+                            if self.screen_wnck:
+                                workspaces = self.screen_wnck.get_workspaces()
+                                for idx, ws in enumerate(workspaces):
+                                    try:
+                                        if ws == window_workspace:
+                                            window_workspace_index = idx
+                                            break
+                                    except Exception:
+                                        continue
+                    else:
+                        logger.warning("Window has no workspace")
+                        return
+            except Exception as workspace_error:
+                logger.debug(f"Failed to get window workspace: {workspace_error}")
+                return
+
+            # Get the current active workspace index
+            current_workspace_index = None
+            try:
+                with self.wnck_lock:
+                    if self.screen_wnck:
+                        current_workspace = self.screen_wnck.get_active_workspace()
+                        if current_workspace:
+                            workspaces = self.screen_wnck.get_workspaces()
+                            for idx, ws in enumerate(workspaces):
+                                try:
+                                    if ws == current_workspace:
+                                        current_workspace_index = idx
+                                        break
+                                except Exception:
+                                    continue
+            except Exception as e:
+                logger.debug(f"Could not get active workspace: {e}")
+
             # Check if the window is already in the current workspace
-            if current_workspace and window_workspace == current_workspace:
-                # Window is already on current workspace - just activate it
-                try:
-                    window.activate(Gtk.get_current_event_time())
-                    logger.info(f"Window '{window_name}' is already on current workspace - brought to front")
-                except Exception as activate_error:
-                    logger.error(f"Failed to activate window: {activate_error}")
-            else:
-                # Window is on a different workspace - switch to that workspace
-                try:
-                    window_workspace.activate(Gtk.get_current_event_time())
-                    logger.info(f"Switched to workspace containing '{window_name}'")
-                except Exception as workspace_activate_error:
-                    logger.error(f"Failed to activate workspace: {workspace_activate_error}")
+            if current_workspace_index is not None and window_workspace_index is not None:
+                if window_workspace_index == current_workspace_index:
+                    # Window is already on current workspace - just activate it
+                    try:
+                        if self.window_is_valid(window):
+                            window.activate(Gtk.get_current_event_time())
+                            logger.info(f"Window '{window_name}' is already on current workspace - brought to front")
+                    except Exception as activate_error:
+                        logger.debug(f"Failed to activate window: {activate_error}")
+                else:
+                    # Window is on a different workspace - switch to that workspace
+                    try:
+                        with self.wnck_lock:
+                            if self.screen_wnck:
+                                workspaces = self.screen_wnck.get_workspaces()
+                                if window_workspace_index < len(workspaces):
+                                    target_workspace = workspaces[window_workspace_index]
+                                    target_workspace.activate(Gtk.get_current_event_time())
+                                    logger.info(f"Switched to workspace containing '{window_name}'")
+                    except Exception as workspace_activate_error:
+                        logger.debug(f"Failed to activate workspace: {workspace_activate_error}")
 
             # Record MRU timestamp if --recent flag is enabled
-            if self.config.get('recent', False):
+            if self.config.get('recent', False) and window_xid:
                 try:
-                    xid = window.get_xid()
-                    if xid:
-                        self.mru_timestamps[xid] = time.time()
-                        logger.debug(f"Updated MRU timestamp for window XID {xid} (workspace switch)")
+                    self.mru_timestamps[window_xid] = time.time()
+                    logger.debug(f"Updated MRU timestamp for window XID {window_xid} (workspace switch)")
                 except Exception as e:
                     logger.debug(f"Could not update MRU timestamp: {e}")
 
         except Exception as e:
             logger.error(f"Error in middle-click handler: {e}")
 
-    def on_move_to_workspace(self, menu_item, window, workspace):
-        """Move the application to the specified workspace"""
+    def on_move_to_workspace(self, menu_item, window_xid, workspace_index):
+        """Move the application to the specified workspace.
+
+        CRITICAL FIX: Looks up window by XID and workspace by index at activation
+        time to ensure we have current valid objects, not stale references.
+
+        Args:
+            menu_item: GTK menu item that triggered this callback
+            window_xid: X11 window ID (XID) of the window to move
+            workspace_index: Index of the target workspace (0-based)
+        """
         try:
-            window.move_to_workspace(workspace)
+            # Look up window by XID at activation time
+            window = self.get_window_by_xid(window_xid)
+            if not window:
+                logger.warning(f"Window with XID {window_xid} no longer exists")
+                return
+
+            if not self.window_is_valid(window):
+                logger.warning(f"Window with XID {window_xid} is not valid")
+                return
+
+            # Look up workspace by index at activation time
+            target_workspace = None
+            try:
+                with self.wnck_lock:
+                    if self.screen_wnck:
+                        workspaces = self.screen_wnck.get_workspaces()
+                        if workspace_index < len(workspaces):
+                            target_workspace = workspaces[workspace_index]
+            except Exception as ws_lookup_error:
+                logger.debug(f"Failed to look up workspace by index {workspace_index}: {ws_lookup_error}")
+                return
+
+            if not target_workspace:
+                logger.warning(f"Workspace at index {workspace_index} not found")
+                return
+
+            # Move window to workspace with validation
+            try:
+                if self.window_is_valid(window):
+                    window.move_to_workspace(target_workspace)
+                    logger.debug(f"Moved window XID {window_xid} to workspace {workspace_index + 1}")
+            except Exception as move_error:
+                logger.error(f"Failed to move window to workspace: {move_error}")
+                if "Wnck" in str(move_error) or "ClassGroup" in str(move_error):
+                    logger.error("CRITICAL: Possible Wnck corruption during move_to_workspace")
+                    self.wnck_last_recreation = 0
+
         except Exception as e:
-            logger.error(f"SEGFAULT RISK: move_to_workspace() failed: {e}")
-            if "Wnck" in str(e) or "ClassGroup" in str(e):
-                logger.error("CRITICAL: Possible Wnck corruption during move_to_workspace")
-                self.wnck_last_recreation = 0
+            logger.error(f"Error in on_move_to_workspace handler: {e}")
 
 
-    def on_drag_app(self, menu_item, window):
-        """Start drag mode - warp cursor to title bar and initiate move"""
+    def on_drag_app(self, menu_item, window_xid):
+        """Start drag mode - warp cursor to title bar and initiate move.
+
+        CRITICAL FIX: Looks up window by XID at activation time.
+        """
         try:
+            # Look up window by XID at activation time
+            window = self.get_window_by_xid(window_xid)
+            if not window:
+                logger.warning(f"Window with XID {window_xid} no longer exists")
+                return
+
+            if not self.window_is_valid(window):
+                logger.warning(f"Window with XID {window_xid} is not valid")
+                return
+
+            # Get window name for logging
+            try:
+                window_name = window.get_name() if self.window_is_valid(window) else "Unknown"
+            except Exception:
+                window_name = "Unknown"
+
             # Get window geometry (returns tuple: x, y, width, height)
-            x, y, width, height = window.get_geometry()
+            if not self.window_is_valid(window):
+                logger.warning("Window became invalid before getting geometry")
+                return
+
+            try:
+                x, y, width, height = window.get_geometry()
+            except Exception as geom_error:
+                logger.error(f"Failed to get window geometry: {geom_error}")
+                return
 
             # Calculate title bar center position (top center of window)
             title_bar_x = x + width // 2
             title_bar_y = y + 15  # Approximate title bar height
 
-            logger.info(f"Starting drag mode for window '{window.get_name()}'")
+            logger.info(f"Starting drag mode for window '{window_name}'")
             logger.info(f"Warping cursor to title bar at ({title_bar_x}, {title_bar_y})")
 
             # Get Gdk display and device
@@ -2347,15 +2689,21 @@ class OtterWindowSwitcher:
             logger.info(f"Cursor warped to ({title_bar_x}, {title_bar_y})")
 
             # Activate window first
-            window.activate(Gtk.get_current_event_time())
-            logger.info("Window activated")
+            if self.window_is_valid(window):
+                try:
+                    window.activate(Gtk.get_current_event_time())
+                    logger.info("Window activated")
+                except Exception as activate_error:
+                    logger.debug(f"Failed to activate window: {activate_error}")
+                    return
 
             # Initiate interactive move mode using Wnck keyboard_move
             try:
-                window.keyboard_move()
-                logger.info("Window move mode activated - move mouse to reposition, click or press Enter to place")
+                if self.window_is_valid(window):
+                    window.keyboard_move()
+                    logger.info("Window move mode activated - move mouse to reposition, click or press Enter to place")
             except Exception as e:
-                logger.warning(f"keyboard_move() failed: {e}")
+                logger.debug(f"keyboard_move() failed: {e}")
                 logger.info("Fallback: Window is active. Try Alt+F7 to move, or use your window manager's move hotkey")
 
         except Exception as e:
