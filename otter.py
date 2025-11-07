@@ -139,16 +139,24 @@ class OtterWindowSwitcher:
         # Initialize Wnck if available (with thread safety)
         if WNCK_AVAILABLE:
             try:
+                logger.debug("  [DEBUG] Initializing Wnck...")
                 with self.wnck_lock:
+                    logger.debug("  [DEBUG] Acquiring Wnck lock...")
                     self.screen_wnck = Wnck.Screen.get_default()
+                    logger.debug(f"  [DEBUG] Got Wnck screen: {self.screen_wnck}")
                     if self.screen_wnck:
                         try:
+                            logger.debug("  [DEBUG] Calling force_update() on new screen...")
                             self.screen_wnck.force_update()
+                            logger.debug("  [DEBUG] force_update() succeeded")
                         except Exception as force_update_error:
                             logger.warning(f"force_update() failed during init: {force_update_error}")
+                            logger.debug(f"  [DEBUG] force_update error type: {type(force_update_error).__name__}")
                             # Don't fail on force_update - screen is still usable
+                    logger.debug("  [DEBUG] Releasing Wnck lock...")
             except Exception as e:
                 logger.error(f"Failed to initialize Wnck: {e}")
+                logger.debug(f"  [DEBUG] Exception during Wnck init: {type(e).__name__}: {str(e)}", exc_info=True)
                 self.screen_wnck = None
         else:
             logger.warning("Wnck not available - window switching disabled")
@@ -229,15 +237,19 @@ class OtterWindowSwitcher:
         This prevents segfaults from accessing stale window pointers.
         """
         if not window:
+            logger.debug("  [DEBUG] Window validation: window is None")
             return False
 
         try:
             # Try a safe read-only operation that indicates the window is valid
             # get_name() is the safest Wnck method - it doesn't access WnckClassGroup
+            logger.debug(f"  [DEBUG] Window validation: Attempting get_name() on {window}")
             name = window.get_name()
-            return name is not None
+            is_valid = name is not None
+            logger.debug(f"  [DEBUG] Window validation: {window} - valid={is_valid}, name='{name}'")
+            return is_valid
         except Exception as e:
-            logger.debug(f"Window validation failed: {e}")
+            logger.debug(f"  [DEBUG] Window validation failed: {type(e).__name__}: {e}")
             return False
 
     def get_window_by_xid(self, xid: int) -> Optional:
@@ -386,22 +398,30 @@ class OtterWindowSwitcher:
 
         self.startup_preprocessing_active = True
         logger.info("Starting startup thumbnail preprocessing...")
+        logger.debug("  [DEBUG] preprocess_startup_thumbnails() started")
 
         try:
             # Create splash screen
+            logger.debug("  [DEBUG] Creating startup splash screen...")
             self.create_startup_splash()
+            logger.debug("  [DEBUG] Splash screen created")
 
             # Give splash time to render
+            logger.debug("  [DEBUG] Processing GTK events to render splash...")
             for _ in range(5):
                 while Gtk.events_pending():
                     Gtk.main_iteration_do(False)
                 GLib.usleep(10000)
+            logger.debug("  [DEBUG] GTK events processed")
 
             # Get all windows
             try:
+                logger.debug("  [DEBUG] Getting user windows for preprocessing...")
                 current_windows = self.get_user_windows()
+                logger.debug(f"  [DEBUG] Got {len(current_windows)} windows")
             except Exception as e:
                 logger.error(f"Error getting windows during startup: {e}")
+                logger.debug(f"  [DEBUG] Error type: {type(e).__name__}")
                 current_windows = []
 
             total_windows = len(current_windows)
@@ -431,22 +451,31 @@ class OtterWindowSwitcher:
 
                 except Exception as e:
                     logger.debug(f"Error preprocessing thumbnail {i + 1}: {e}")
+                    logger.debug(f"  [DEBUG] Error type: {type(e).__name__}")
                     continue
 
             logger.info("Startup thumbnail preprocessing complete")
+            logger.debug(f"  [DEBUG] Preprocessing complete, cached {len(self.screenshot_cache)} screenshots")
 
         except Exception as e:
             logger.error(f"Error during startup preprocessing: {e}")
+            logger.debug(f"  [DEBUG] Exception type: {type(e).__name__}", exc_info=True)
         finally:
             self.startup_preprocessing_active = False
+            logger.debug("  [DEBUG] Setting startup_preprocessing_active = False")
 
             # Close splash screen
             if self.startup_splash:
                 try:
+                    logger.debug("  [DEBUG] Destroying splash window...")
                     self.startup_splash['window'].destroy()
+                    logger.debug("  [DEBUG] Splash window destroyed")
                 except Exception as e:
                     logger.debug(f"Error destroying splash window: {e}")
+                    logger.debug(f"  [DEBUG] Error type: {type(e).__name__}")
                 self.startup_splash = None
+
+            logger.debug("  [DEBUG] preprocess_startup_thumbnails() returning")
 
     def check_mouse_position(self):
         """Check if mouse cursor is at the specified screen edge and show/hide window accordingly"""
@@ -1063,17 +1092,23 @@ class OtterWindowSwitcher:
                     self.wnck_just_recreated = False  # Reset flag
                 else:
                     try:
+                        logger.debug("  [DEBUG] Calling screen_wnck.force_update()...")
                         self.screen_wnck.force_update()
+                        logger.debug("  [DEBUG] force_update() completed successfully")
                     except Exception as force_update_error:
                         # If force_update fails, Wnck state is corrupted - recreate immediately
                         logger.error(f"force_update() failed (Wnck corruption detected): {force_update_error}")
+                        logger.debug(f"  [DEBUG] force_update error type: {type(force_update_error).__name__}")
                         logger.info("Attempting immediate Wnck recreation due to corruption...")
                         if self.recreate_wnck_screen():
                             # Try one more time with fresh screen
                             try:
+                                logger.debug("  [DEBUG] Retrying force_update() after recreation...")
                                 self.screen_wnck.force_update()
+                                logger.debug("  [DEBUG] Retry force_update() succeeded")
                             except Exception as retry_error:
                                 logger.error(f"force_update() failed after recreation: {retry_error}")
+                                logger.debug(f"  [DEBUG] Retry force_update error type: {type(retry_error).__name__}")
                                 return windows
                         else:
                             logger.error("Failed to recreate Wnck screen after corruption")
@@ -1081,37 +1116,48 @@ class OtterWindowSwitcher:
 
                 # Get all windows from Wnck
                 try:
+                    logger.debug("  [DEBUG] Calling screen_wnck.get_windows()...")
                     window_list = self.screen_wnck.get_windows()
+                    logger.debug(f"  [DEBUG] get_windows() returned {len(window_list) if window_list else 0} windows")
                 except Exception as get_windows_error:
                     # If get_windows fails, Wnck state is corrupted
                     logger.error(f"get_windows() failed (Wnck corruption detected): {get_windows_error}")
+                    logger.debug(f"  [DEBUG] get_windows error type: {type(get_windows_error).__name__}")
                     return windows
 
                 if not window_list:
+                    logger.debug("  [DEBUG] No windows returned from get_windows()")
                     return windows
 
-                for window in window_list:
+                for window_index, window in enumerate(window_list):
                     try:
+                        logger.debug(f"  [DEBUG] Processing window {window_index}: {window}")
+
                         # Validate window object is still valid (defensive check)
                         if not self.window_is_valid(window):
-                            logger.debug("Window failed validation, skipping")
+                            logger.debug(f"  [DEBUG] Window {window_index} failed validation, skipping")
                             continue
 
                         # Include normal windows, even if minimized
                         try:
+                            logger.debug(f"  [DEBUG] Getting window type for window {window_index}...")
                             window_type = window.get_window_type()
+                            logger.debug(f"  [DEBUG] Window {window_index} type: {window_type}")
                             if window_type != Wnck.WindowType.NORMAL:
+                                logger.debug(f"  [DEBUG] Window {window_index} is not NORMAL type, skipping")
                                 continue
                         except Exception as type_error:
-                            logger.debug(f"get_window_type() failed: {type_error}")
+                            logger.debug(f"  [DEBUG] get_window_type() failed for window {window_index}: {type_error}")
                             # Assume it's not a normal window if we can't determine type
                             continue
 
                         # Get window name (safe operation)
                         try:
+                            logger.debug(f"  [DEBUG] Getting name for window {window_index}...")
                             window_name = window.get_name() or "Unknown"
+                            logger.debug(f"  [DEBUG] Window {window_index} name: '{window_name}'")
                         except Exception as name_error:
-                            logger.debug(f"get_name() failed: {name_error}")
+                            logger.debug(f"  [DEBUG] get_name() failed for window {window_index}: {name_error}")
                             window_name = "Unknown"
 
                         # IMPORTANT: Skip get_application() entirely to avoid WnckClassGroup corruption
@@ -1709,43 +1755,55 @@ class OtterWindowSwitcher:
             # Set lock to prevent other code from touching Wnck during recreation
             self.wnck_recreating = True
             logger.info(f"Recreating Wnck screen object... (call count: {self.wnck_call_count})")
+            logger.debug(f"  [DEBUG] Old screen object: {self.screen_wnck}")
 
             # Disconnect signals from old screen first
             if self.screen_wnck:
                 try:
+                    logger.debug("  [DEBUG] Destroying signal handlers from old screen")
                     # Try to disconnect all handlers (best effort)
                     GLib.signal_handlers_destroy(self.screen_wnck)
-                except:
+                    logger.debug("  [DEBUG] Signal handlers destroyed")
+                except Exception as sig_error:
+                    logger.debug(f"  [DEBUG] Failed to destroy signal handlers: {sig_error}")
                     pass
 
             # Longer delay to let old screen settle and any pending events clear
+            logger.debug("  [DEBUG] Sleeping 0.2s to let old screen settle...")
             time.sleep(0.2)
 
             # Create new screen
+            logger.debug("  [DEBUG] Creating new Wnck screen object...")
             self.screen_wnck = Wnck.Screen.get_default()
+            logger.debug(f"  [DEBUG] New screen object: {self.screen_wnck}")
 
             # DON'T call force_update immediately after creation
             # Let it initialize naturally first
 
             # Reconnect signals to new screen
+            logger.debug("  [DEBUG] Connecting signal handlers to new screen...")
             self.screen_wnck.connect("window-opened", self.on_window_changed)
             self.screen_wnck.connect("window-closed", self.on_window_changed)
+            logger.debug("  [DEBUG] Signal handlers connected")
 
             self.wnck_last_recreation = time.time()
             self.wnck_call_count = 0
             self.wnck_just_recreated = True  # Skip immediate force_update
 
             # Longer delay before returning to let Wnck settle completely
+            logger.debug("  [DEBUG] Sleeping 0.2s to let new screen settle...")
             time.sleep(0.2)
 
             # Clear lock
             self.wnck_recreating = False
 
             logger.info("Wnck screen recreated successfully")
+            logger.debug(f"  [DEBUG] Wnck state after recreation: call_count={self.wnck_call_count}, just_recreated={self.wnck_just_recreated}")
             return True
 
         except Exception as e:
             logger.error(f"Failed to recreate Wnck screen: {e}")
+            logger.debug(f"  [DEBUG] Exception details: {type(e).__name__}: {str(e)}", exc_info=True)
             self.wnck_recreating = False  # Clear lock even on failure
             return False
 
@@ -2775,14 +2833,22 @@ class OtterWindowSwitcher:
             # Pre-process startup thumbnails before entering main loop
             # This populates the cache so the first time user triggers the switcher,
             # they see cached images instead of waiting 15+ seconds for capture
+            logger.debug("  [DEBUG] Scheduling startup thumbnail preprocessing via GLib.idle_add()")
             GLib.idle_add(self.preprocess_startup_thumbnails)
 
             # Run the main event loop
+            logger.info("Entering GTK main event loop")
+            logger.debug("  [DEBUG] About to call Gtk.main()...")
             Gtk.main()
+            logger.info("GTK main event loop exited")
         except KeyboardInterrupt:
             logger.info("Received interrupt signal, shutting down...")
             self.cleanup()
             sys.exit(0)
+        except Exception as e:
+            logger.error(f"Exception in run(): {e}", exc_info=True)
+            logger.debug(f"  [DEBUG] Exception type: {type(e).__name__}")
+            raise
         
 
 
@@ -2833,6 +2899,12 @@ Examples:
     edge_group.add_argument('--west', action='store_true',
                         help='Trigger window switcher at the west edge of the screen')
 
+    # Debug and verbose flags
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug logging (very detailed output)')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Enable verbose logging (detailed output)')
+
     args = parser.parse_args()
 
     # Set default to north if no edge is specified
@@ -2862,6 +2934,16 @@ def main():
     """Main entry point"""
     # Parse command line arguments
     args = parse_arguments()
+
+    # Configure logging level based on flags
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled (very detailed output)")
+    elif args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("Verbose logging enabled (detailed output)")
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     logger.info("Starting Otter Window Switcher...")
 
