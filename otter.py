@@ -113,6 +113,11 @@ class OtterWindowSwitcher:
 
         # Parse arguments and set up configuration
         if args:
+            # Parse ignore list if provided
+            ignore_list = []
+            if hasattr(args, 'ignore') and args.ignore:
+                ignore_list = [name.strip() for name in args.ignore.split(',')]
+
             self.config = {
                 'nrows': args.nrows,
                 'ncols': args.ncols,
@@ -124,7 +129,8 @@ class OtterWindowSwitcher:
                 'east': args.east,
                 'west': args.west,
                 'recent': args.recent,
-                'main_character': args.main_character
+                'main_character': args.main_character,
+                'ignore_list': ignore_list
             }
         else:
             self.config = self.get_default_config()
@@ -185,10 +191,12 @@ class OtterWindowSwitcher:
 
         # Wnck health tracking
         self.wnck_last_recreation = time.time()
-        self.wnck_recreation_interval = 120  # Recreate Wnck screen every 2 minutes (VERY aggressive for testing)
+        self.wnck_recreation_interval = 3600  # Recreate Wnck screen every 1 hour (was 120s, too aggressive)
         self.wnck_call_count = 0
         self.wnck_just_recreated = False  # Flag to skip immediate force_update after recreation
         self.wnck_recreating = False  # Lock flag to prevent concurrent Wnck access during recreation
+        self.wnck_recreation_start_time = None  # Track when recreation started for initialization window
+        self.wnck_initialization_grace_period = 5.0  # Allow 5 seconds for Wnck to initialize after recreation
 
         # Monitoring IDs
         self.monitor_id = None
@@ -228,7 +236,8 @@ class OtterWindowSwitcher:
             'east': False,
             'west': False,
             'recent': False,  # Most recently used ordering
-            'main_character': False  # Respect fullscreen apps
+            'main_character': False,  # Respect fullscreen apps
+            'ignore_list': []  # List of window names to ignore
         }
 
     def window_is_valid(self, window) -> bool:
@@ -384,9 +393,10 @@ class OtterWindowSwitcher:
                 progress.set_text(f"{current}/{total}")
                 status.set_markup(f"<small>Pre-loading window thumbnails... {current}/{total}</small>")
 
-            # Keep GTK responsive
-            while Gtk.events_pending():
-                Gtk.main_iteration_do(False)
+            # Keep GTK responsive by letting it process pending events
+            # Do NOT call Gtk.main_iteration_do() - it corrupts Wnck state
+            # Just give the event loop a chance with a brief sleep
+            GLib.usleep(10000)
         except Exception as e:
             logger.debug(f"Error updating startup progress: {e}")
 
@@ -406,13 +416,14 @@ class OtterWindowSwitcher:
             self.create_startup_splash()
             logger.debug("  [DEBUG] Splash screen created")
 
-            # Give splash time to render
+            # Display splash screen - process pending GTK events to render it
+            # We're before Gtk.main(), so we need to process events carefully
             logger.debug("  [DEBUG] Processing GTK events to render splash...")
-            for _ in range(5):
+            for _ in range(10):
                 while Gtk.events_pending():
                     Gtk.main_iteration_do(False)
-                GLib.usleep(10000)
-            logger.debug("  [DEBUG] GTK events processed")
+                GLib.usleep(10000)  # 10ms between iterations
+            logger.debug("  [DEBUG] Splash should now be visible")
 
             # Get all windows
             try:
@@ -1067,15 +1078,15 @@ class OtterWindowSwitcher:
             logger.debug("get_user_windows: screen_wnck is None")
             return windows
 
-        # If recreation is in progress, return empty list (don't touch Wnck)
-        if self.wnck_recreating:
-            logger.debug("Wnck recreation in progress, skipping query")
-            return windows
-
         logger.debug(f"get_user_windows: starting (Wnck age: {time.time() - self.wnck_last_recreation:.1f}s, calls: {self.wnck_call_count})")
 
         # Use lock to prevent Wnck access during other operations
         with self.wnck_lock:
+            # CRITICAL: Check recreation flag inside lock to prevent race conditions
+            # If recreation is in progress, return empty list (don't touch Wnck)
+            if self.wnck_recreating:
+                logger.debug("Wnck recreation in progress, skipping query")
+                return windows
             # Periodically recreate Wnck screen to prevent corruption
             if self.should_recreate_wnck():
                 self.recreate_wnck_screen()
@@ -1087,9 +1098,9 @@ class OtterWindowSwitcher:
                 # CRITICAL: Force Wnck to update its internal state before querying
                 # This prevents accessing stale/corrupted WnckClassGroup objects
                 # EXCEPT right after recreation - let it initialize naturally first
-                if self.wnck_just_recreated:
-                    logger.debug("Skipping force_update immediately after recreation")
-                    self.wnck_just_recreated = False  # Reset flag
+                time_since_recreation = time.time() - self.wnck_last_recreation if self.wnck_recreation_start_time is None else time.time() - self.wnck_recreation_start_time
+                if time_since_recreation < self.wnck_initialization_grace_period:
+                    logger.debug(f"Skipping force_update during initialization grace period ({time_since_recreation:.2f}s < {self.wnck_initialization_grace_period}s)")
                 else:
                     try:
                         logger.debug("  [DEBUG] Calling screen_wnck.force_update()...")
@@ -1172,8 +1183,15 @@ class OtterWindowSwitcher:
                             'unity-panel-service', 'Desktop', 'Otter Window Switcher'
                         ]
 
-                        # Skip if it's a system app or our own window
+                        # Check if window is in ignore list (case-insensitive)
+                        is_ignored = any(
+                            window_name.lower() == ignored.lower()
+                            for ignored in self.config.get('ignore_list', [])
+                        )
+
+                        # Skip if it's a system app, ignored, or our own window
                         if (app_name.lower() not in [app.lower() for app in system_apps] and
+                            not is_ignored and
                             window_name != "Otter Window Switcher" and
                             window_name and len(window_name.strip()) > 0):
 
@@ -1234,7 +1252,8 @@ class OtterWindowSwitcher:
                                 'is_minimized': is_minimized,
                                 'xid': xid,  # Cache XID for MRU sorting
                                 'workspace_index': workspace_index,      # 1-indexed workspace number
-                                'workspace_name': workspace_name         # Workspace name
+                                'workspace_name': workspace_name,        # Workspace name
+                                'window_type': str(window_type)          # Window type for listing
                             })
 
                     except Exception as e:
@@ -1266,6 +1285,33 @@ class OtterWindowSwitcher:
 
         logger.debug(f"get_user_windows: returning {len(windows)} windows (Wnck age: {time.time() - self.wnck_last_recreation:.1f}s)")
         return windows
+
+    def list_all_windows(self):
+        """List all current windows with detailed information for filtering purposes"""
+        windows = self.get_user_windows()
+
+        if not windows:
+            print("No windows found")
+            return
+
+        # Print header
+        print("\nCurrent Windows:")
+        print("-" * 80)
+        print(f"{'Name':<40} {'XID':<12} {'Type':<15} {'Workspace':<10}")
+        print("-" * 80)
+
+        for window_info in windows:
+            name = window_info.get('name', 'Unknown')[:39]  # Truncate to 39 chars to fit 40-char column
+            xid = window_info.get('xid', 'N/A')
+            window_type = window_info.get('window_type', 'Unknown')
+            workspace = window_info.get('workspace_name', 'Unknown')
+
+            print(f"{name:<40} {str(xid):<12} {window_type:<15} {workspace:<10}")
+
+        print("-" * 80)
+        print(f"Total: {len(windows)} window(s)")
+        print("\nUsage: otter.py --ignore \"Window Name 1,Window Name 2,...\"")
+        print("(Window names are case-insensitive)\n")
 
     def create_window_thumbnail(self, window_info: Dict) -> Gtk.Widget:
         """Create a thumbnail button for a window with workspace badge indicator"""
@@ -1754,19 +1800,14 @@ class OtterWindowSwitcher:
         try:
             # Set lock to prevent other code from touching Wnck during recreation
             self.wnck_recreating = True
+            self.wnck_recreation_start_time = time.time()  # Start grace period timer
             logger.info(f"Recreating Wnck screen object... (call count: {self.wnck_call_count})")
             logger.debug(f"  [DEBUG] Old screen object: {self.screen_wnck}")
 
             # Disconnect signals from old screen first
-            if self.screen_wnck:
-                try:
-                    logger.debug("  [DEBUG] Destroying signal handlers from old screen")
-                    # Try to disconnect all handlers (best effort)
-                    GLib.signal_handlers_destroy(self.screen_wnck)
-                    logger.debug("  [DEBUG] Signal handlers destroyed")
-                except Exception as sig_error:
-                    logger.debug(f"  [DEBUG] Failed to destroy signal handlers: {sig_error}")
-                    pass
+            # Don't use GLib.signal_handlers_destroy() - it's too aggressive and can corrupt state
+            # Just let it go - the old screen object will be garbage collected
+            # and the new screen will have its own signal handlers
 
             # Longer delay to let old screen settle and any pending events clear
             logger.debug("  [DEBUG] Sleeping 0.2s to let old screen settle...")
@@ -2830,11 +2871,13 @@ class OtterWindowSwitcher:
     def run(self):
         """Run the application"""
         try:
-            # Pre-process startup thumbnails before entering main loop
+            # Pre-process startup thumbnails BEFORE entering main loop
             # This populates the cache so the first time user triggers the switcher,
             # they see cached images instead of waiting 15+ seconds for capture
-            logger.debug("  [DEBUG] Scheduling startup thumbnail preprocessing via GLib.idle_add()")
-            GLib.idle_add(self.preprocess_startup_thumbnails)
+            # We do this synchronously before Gtk.main() to avoid event loop corruption
+            logger.debug("  [DEBUG] Starting synchronous startup thumbnail preprocessing...")
+            self.preprocess_startup_thumbnails()
+            logger.debug("  [DEBUG] Startup preprocessing complete, entering main loop...")
 
             # Run the main event loop
             logger.info("Entering GTK main event loop")
@@ -2849,7 +2892,94 @@ class OtterWindowSwitcher:
             logger.error(f"Exception in run(): {e}", exc_info=True)
             logger.debug(f"  [DEBUG] Exception type: {type(e).__name__}")
             raise
-        
+
+
+
+def validate_ignore_list(ignore_list_str):
+    """
+    Validate that all items in the ignore list are valid application window names.
+
+    Args:
+        ignore_list_str: Comma-separated string of window names to ignore
+
+    Returns:
+        List of validated window names
+
+    Raises:
+        SystemExit: If validation fails with details of invalid items
+    """
+    if not ignore_list_str or not ignore_list_str.strip():
+        return []
+
+    # Parse the ignore list
+    ignore_list = [name.strip() for name in ignore_list_str.split(',') if name.strip()]
+
+    if not ignore_list:
+        return []
+
+    # Try to initialize Wnck to get available windows
+    try:
+        # Initialize GTK
+        from gi.repository import Gtk, Gdk
+        Gtk.init_check([])
+
+        # Initialize Wnck if available
+        try:
+            gi.require_version("Wnck", "3.0")
+            from gi.repository import Wnck
+
+            Wnck.set_client_type(Wnck.ClientType.PAGER)
+            screen = Wnck.Screen.get_default()
+
+            if not screen:
+                logger.warning("Could not get Wnck screen - skipping ignore list validation")
+                return ignore_list
+
+            # Force update to get current windows
+            screen.force_update()
+
+            # Get all available windows
+            windows = screen.get_windows() or []
+            available_windows = set()
+
+            for window in windows:
+                try:
+                    window_name = window.get_name()
+                    if window_name:
+                        available_windows.add(window_name)
+                except Exception as e:
+                    logger.debug(f"Could not get window name: {e}")
+
+            # Check each ignore item
+            not_found = []
+            for ignore_item in ignore_list:
+                # Case-insensitive match
+                found = any(ignore_item.lower() == win.lower() for win in available_windows)
+                if not found:
+                    not_found.append(ignore_item)
+
+            if not_found:
+                available_list = "\n  ".join(sorted(available_windows)) if available_windows else "No windows found"
+                error_msg = (
+                    f"Error: The following window names in --ignore were not found:\n"
+                    f"  {chr(10).join('  ' + item for item in not_found)}\n"
+                    f"\nAvailable windows:\n"
+                    f"  {available_list}\n"
+                    f"\nPlease check for typos in your --ignore argument."
+                )
+                logger.error(error_msg)
+                sys.exit(1)
+
+            return ignore_list
+
+        except (ImportError, ValueError):
+            # Wnck not available, can't validate - just warn and accept the list
+            logger.warning("Wnck not available - cannot validate --ignore items. Please ensure window names are spelled correctly.")
+            return ignore_list
+
+    except Exception as e:
+        logger.warning(f"Could not validate --ignore list: {e} - accepting as-is")
+        return ignore_list
 
 
 def parse_arguments():
@@ -2905,6 +3035,12 @@ Examples:
     parser.add_argument('--verbose', action='store_true',
                         help='Enable verbose logging (detailed output)')
 
+    # Utility arguments
+    parser.add_argument('--list', action='store_true',
+                        help='List all current windows with information (name, XID, type, workspace) and exit')
+    parser.add_argument('--ignore', type=str, metavar='WINDOW_LIST',
+                        help='Comma-separated list of window names to ignore (e.g., "Firefox,Google Chrome,Slack")')
+
     args = parser.parse_args()
 
     # Set default to north if no edge is specified
@@ -2944,6 +3080,17 @@ def main():
         logger.debug("Verbose logging enabled (detailed output)")
     else:
         logging.getLogger().setLevel(logging.INFO)
+
+    # Validate --ignore items if provided
+    if hasattr(args, 'ignore') and args.ignore:
+        logger.info("Validating --ignore window list...")
+        validate_ignore_list(args.ignore)
+
+    # Handle --list argument (list windows and exit)
+    if hasattr(args, 'list') and args.list:
+        switcher = OtterWindowSwitcher(args)
+        switcher.list_all_windows()
+        sys.exit(0)
 
     logger.info("Starting Otter Window Switcher...")
 
