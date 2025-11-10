@@ -416,13 +416,12 @@ class OtterWindowSwitcher:
             self.create_startup_splash()
             logger.debug("  [DEBUG] Splash screen created")
 
-            # Display splash screen - process pending GTK events to render it
-            # We're before Gtk.main(), so we need to process events carefully
-            logger.debug("  [DEBUG] Processing GTK events to render splash...")
+            # Display splash screen - give it time to render
+            # Do NOT call Gtk.main_iteration_do() before Gtk.main() - it corrupts Wnck state
+            # Just sleep to allow the window to become visible
+            logger.debug("  [DEBUG] Giving splash screen time to render...")
             for _ in range(10):
-                while Gtk.events_pending():
-                    Gtk.main_iteration_do(False)
-                GLib.usleep(10000)  # 10ms between iterations
+                GLib.usleep(10000)  # 10ms per iteration = 100ms total
             logger.debug("  [DEBUG] Splash should now be visible")
 
             # Get all windows
@@ -1837,6 +1836,11 @@ class OtterWindowSwitcher:
 
             # Clear lock
             self.wnck_recreating = False
+
+            # CRITICAL BUG FIX: Reset the grace period timer to None
+            # Previously this was never reset, causing the grace period to never expire
+            # and force_update() to be skipped indefinitely, leading to Wnck corruption
+            self.wnck_recreation_start_time = None
 
             logger.info("Wnck screen recreated successfully")
             logger.debug(f"  [DEBUG] Wnck state after recreation: call_count={self.wnck_call_count}, just_recreated={self.wnck_just_recreated}")
