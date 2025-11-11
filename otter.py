@@ -191,7 +191,7 @@ class OtterWindowSwitcher:
 
         # Wnck health tracking
         self.wnck_last_recreation = time.time()
-        self.wnck_recreation_interval = 3600  # Recreate Wnck screen every 1 hour (was 120s, too aggressive)
+        self.wnck_recreation_interval = 7200  # Recreate Wnck screen every 2 hours (was 3600s/1hr, still causing crashes after prolonged use)
         self.wnck_call_count = 0
         self.wnck_just_recreated = False  # Flag to skip immediate force_update after recreation
         self.wnck_recreating = False  # Lock flag to prevent concurrent Wnck access during recreation
@@ -1097,7 +1097,7 @@ class OtterWindowSwitcher:
                 # CRITICAL: Force Wnck to update its internal state before querying
                 # This prevents accessing stale/corrupted WnckClassGroup objects
                 # EXCEPT right after recreation - let it initialize naturally first
-                time_since_recreation = time.time() - self.wnck_last_recreation if self.wnck_recreation_start_time is None else time.time() - self.wnck_recreation_start_time
+                time_since_recreation = time.time() - self.wnck_last_recreation
                 if time_since_recreation < self.wnck_initialization_grace_period:
                     logger.debug(f"Skipping force_update during initialization grace period ({time_since_recreation:.2f}s < {self.wnck_initialization_grace_period}s)")
                 else:
