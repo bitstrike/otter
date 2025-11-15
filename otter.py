@@ -81,11 +81,17 @@ except ImportError:
     logger.info("GdkX11 not available - Wayland compatibility mode enabled")
     WAYLAND_SUPPORT = True
 
+# Note: Shift key monitoring uses polling-based approach (Gdk.ModifierType.SHIFT_MASK)
+# Keybinder3 cannot bind modifier keys directly, so we use continuous polling instead
+
 # Suppress accessibility warnings if available
 try:
     os.environ['NO_AT_BRIDGE'] = '1'
 except Exception:
     pass
+
+# Global shift key state (0 = not pressed, 1 = pressed)
+SHIFT_STATE = 0
 
 class OtterWindowSwitcher:
     # Workspace color palette (supports up to 10 workspaces with distinct colors)
@@ -174,6 +180,7 @@ class OtterWindowSwitcher:
         self.window_clicked = False
         self.HIDE_STATE = True  # Semaphore: True = window can hide, False = window cannot hide
         self._middle_click_mode = False  # Flag to keep otter visible during middle-click workflow
+        self.shift_hidden = False  # Track if window is hidden by shift key (vs mouse movement)
 
         # Drag mode state - initialize here to avoid AttributeError
         self.drag_active = False
@@ -217,6 +224,7 @@ class OtterWindowSwitcher:
         # Set up monitoring
         self.setup_mouse_monitoring()
         self.setup_screenshot_caching()
+        self.setup_shift_key_monitoring()
 
         # Connect to window changes
         if self.screen_wnck:
@@ -2871,6 +2879,70 @@ class OtterWindowSwitcher:
             logger.debug(f"Error clearing window buttons: {e}")
 
         logger.info("Cleanup complete")
+
+    def setup_shift_key_monitoring(self):
+        """Set up shift key monitoring using key events
+        
+        Note: We connect to key-press-event and key-release-event on the window
+        to detect when shift keys (Shift_L or Shift_R) are pressed/released.
+        This only works when the Otter window is visible and has focus.
+        """
+        if not self.window:
+            logger.warning("Cannot set up shift key monitoring - window not created yet")
+            return
+        
+        # Connect key event handlers to the window
+        self.window.connect("key-press-event", self._on_key_press)
+        self.window.connect("key-release-event", self._on_key_release)
+        logger.info("Shift key monitoring enabled (event-based)")
+    
+    def _on_key_press(self, widget, event):
+        """Handle key press events"""
+        global SHIFT_STATE
+        
+        keyval = event.keyval
+        keyname = Gdk.keyval_name(keyval)
+        
+        # Check if it's a shift key
+        if keyname in ['Shift_L', 'Shift_R']:
+            if SHIFT_STATE == 0:
+                SHIFT_STATE = 1
+                print(f"🔽 SHIFT DOWN - {keyname}")
+                logger.debug(f"SHIFT DOWN - {keyname}")
+                
+                # Hide window if visible
+                if self.is_visible and not self.shift_hidden:
+                    print("   → Hiding window")
+                    logger.debug("Hiding window due to shift press")
+                    self.shift_hidden = True
+                    if self.window:
+                        self.window.hide()
+        
+        return False  # Allow event to propagate
+    
+    def _on_key_release(self, widget, event):
+        """Handle key release events"""
+        global SHIFT_STATE
+        
+        keyval = event.keyval
+        keyname = Gdk.keyval_name(keyval)
+        
+        # Check if it's a shift key
+        if keyname in ['Shift_L', 'Shift_R']:
+            if SHIFT_STATE == 1:
+                SHIFT_STATE = 0
+                print(f"🔼 SHIFT RELEASE - {keyname}")
+                logger.debug(f"SHIFT RELEASE - {keyname}")
+                
+                # Show window if it was hidden by shift
+                if self.shift_hidden and self.is_visible:
+                    print("   → Showing window")
+                    logger.debug("Showing window due to shift release")
+                    self.shift_hidden = False
+                    if self.window:
+                        self.window.show_all()
+        
+        return False  # Allow event to propagate
 
     def run(self):
         """Run the application"""
