@@ -55,7 +55,8 @@ The application runs in the background. To activate:
 4. **Middle-click on any thumbnail** to switch to that app's workspace without activating it
 5. **Right-click** for context menu with window operations
 6. **Mouse wheel** to scroll through windows
-7. **Move mouse away** to auto-hide
+7. **Press shift** to temporarily hide the window (if `--hide` is configured)
+8. **Move mouse away** to auto-hide
 
 ### Command Line Options
 
@@ -76,9 +77,10 @@ The application runs in the background. To activate:
 ./otter.py --recent                     # MRU ordering (most recent first)
 ./otter.py --main-character             # Don't trigger during fullscreen apps
 ./otter.py --delay 500                  # 500ms delay before hiding
+./otter.py --hide 3                     # Press shift to hide for 3 seconds
 
 # Combined example (gaming setup)
-./otter.py --east --ncols 6 --notitle --recent --main-character
+./otter.py --east --ncols 6 --notitle --recent --main-character --hide 5
 
 # Show help
 ./otter.py --help
@@ -96,6 +98,7 @@ The application runs in the background. To activate:
 
 **Behavior Options**:
 - `--delay MILLISECONDS`: Delay before hiding the window (default: 0)
+- `--hide SECONDS`: Duration to hide window when shift key is pressed (default: 0 = disabled)
 - `--recent`: Order thumbnails by most recently used (MRU)
 - `--main-character`: Disable edge trigger when fullscreen app is active (gaming mode)
 
@@ -109,7 +112,37 @@ The application runs in the background. To activate:
 - `--nrows` and `--ncols` are mutually exclusive - specify only one
 - Edge trigger options are mutually exclusive - specify only one
 - `--delay` may cause minor visual flickering on hide
+- `--hide` enables shift key timed hide feature (0 = disabled)
 - `--main-character` prevents interrupting games like Minecraft when in fullscreen
+
+## Features
+
+### Shift Key Timed Hide
+
+Press shift while the Otter window is visible to temporarily hide it, allowing you to see content behind the window switcher.
+
+**Usage:**
+```bash
+# Hide for 3 seconds when shift is pressed
+./otter.py --hide 3
+
+# Hide for 5 seconds with custom layout
+./otter.py --hide 5 --ncols 6
+```
+
+**How it works:**
+1. Move mouse to edge → Otter window appears
+2. Press shift key → Window hides immediately
+3. Wait X seconds → Window automatically reappears
+4. Press shift again → Hides for another X seconds
+
+**Notes:**
+- Window must have focus for shift detection (auto-focuses when it appears)
+- Both left and right shift keys work
+- Feature is disabled by default (use `--hide X` to enable)
+- Supports decimal values (e.g., `--hide 2.5`)
+
+See [SHIFT_KEY_FEATURE.md](SHIFT_KEY_FEATURE.md) for detailed documentation.
 
 ## Window Operations
 
@@ -210,6 +243,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 ---
 
-**Tip**: For gaming setups, try: `./otter.py --east --main-character --recent --notitle`
+**Tips:**
 
-This positions the trigger on the right edge (away from game UI), respects fullscreen mode, orders windows by recent use, and saves screen space.
+**For gaming setups:**
+```bash
+./otter.py --east --main-character --recent --notitle --hide 5
+```
+This positions the trigger on the right edge (away from game UI), respects fullscreen mode, orders windows by recent use, saves screen space, and lets you quickly hide the switcher with shift.
+
+**For quick window peeking:**
+```bash
+./otter.py --hide 2
+```
+Press shift to hide the window for 2 seconds, perfect for quickly checking what's behind the switcher.

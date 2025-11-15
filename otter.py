@@ -130,6 +130,7 @@ class OtterWindowSwitcher:
                 'xsize': args.xsize,
                 'show_title': not args.notitle,
                 'hide_delay': args.delay,
+                'hide_duration': args.hide,
                 'north': args.north,
                 'south': args.south,
                 'east': args.east,
@@ -239,6 +240,7 @@ class OtterWindowSwitcher:
             'xsize': 160,
             'show_title': True,  # Show the fancy title bar
             'hide_delay': 0,     # Delay in milliseconds before hiding (default: 0)
+            'hide_duration': 0,  # Duration in seconds to hide when shift pressed (default: 0 = disabled)
             'north': True,  # Default to north edge
             'south': False,
             'east': False,
@@ -1900,6 +1902,11 @@ class OtterWindowSwitcher:
         before displaying windows, ensuring no stale window references are shown.
         """
         if not self.is_visible and self.window:
+            # Don't show if we're in a shift-hide period
+            if self.shift_hidden:
+                logger.debug("Skipping show_window - in shift-hide period")
+                return
+            
             # Reset the clicked flag when showing the window
             self.window_clicked = False
 
@@ -2883,66 +2890,65 @@ class OtterWindowSwitcher:
     def setup_shift_key_monitoring(self):
         """Set up shift key monitoring using key events
         
-        Note: We connect to key-press-event and key-release-event on the window
-        to detect when shift keys (Shift_L or Shift_R) are pressed/released.
-        This only works when the Otter window is visible and has focus.
+        When shift is pressed, the window hides for a configurable duration
+        specified by --hide argument (in seconds). If --hide is 0, feature is disabled.
         """
         if not self.window:
             logger.warning("Cannot set up shift key monitoring - window not created yet")
             return
         
-        # Connect key event handlers to the window
+        # Check if shift-to-hide is enabled
+        hide_duration = self.config.get('hide_duration', 0)
+        if hide_duration <= 0:
+            logger.info("Shift key hide disabled (--hide not specified or 0)")
+            return
+        
+        # Connect key event handler to the window
         self.window.connect("key-press-event", self._on_key_press)
-        self.window.connect("key-release-event", self._on_key_release)
-        logger.info("Shift key monitoring enabled (event-based)")
+        logger.info(f"Shift key monitoring enabled (hide for {hide_duration}s on press)")
     
     def _on_key_press(self, widget, event):
         """Handle key press events"""
-        global SHIFT_STATE
-        
         keyval = event.keyval
         keyname = Gdk.keyval_name(keyval)
         
         # Check if it's a shift key
         if keyname in ['Shift_L', 'Shift_R']:
-            if SHIFT_STATE == 0:
-                SHIFT_STATE = 1
-                print(f"🔽 SHIFT DOWN - {keyname}")
-                logger.debug(f"SHIFT DOWN - {keyname}")
+            # Only hide if window is visible and not already shift-hidden
+            if self.is_visible and not self.shift_hidden:
+                hide_duration = self.config.get('hide_duration', 0)
+                print(f"🔽 SHIFT PRESSED - Hiding window for {hide_duration}s")
+                logger.debug(f"SHIFT PRESSED - {keyname} - Hiding for {hide_duration}s")
                 
-                # Hide window if visible
-                if self.is_visible and not self.shift_hidden:
-                    print("   → Hiding window")
-                    logger.debug("Hiding window due to shift press")
-                    self.shift_hidden = True
-                    if self.window:
-                        self.window.hide()
+                # Mark as shift-hidden BEFORE hiding
+                self.shift_hidden = True
+                
+                # Hide the window
+                if self.window:
+                    self.window.hide()
+                
+                # Schedule window to reappear after duration
+                hide_ms = int(hide_duration * 1000)
+                GLib.timeout_add(hide_ms, self._shift_hide_timeout)
         
         return False  # Allow event to propagate
     
-    def _on_key_release(self, widget, event):
-        """Handle key release events"""
-        global SHIFT_STATE
+    def _shift_hide_timeout(self):
+        """Called after shift hide duration expires"""
+        # Only show if still marked as shift-hidden
+        # (is_visible stays True even when window.hide() is called)
+        if self.shift_hidden:
+            print("⏰ Shift hide timeout - Showing window")
+            logger.debug("Shift hide timeout - showing window")
+            
+            # Reset flag FIRST to allow future shift presses
+            self.shift_hidden = False
+            
+            # Show the window if still in visible state
+            if self.is_visible and self.window:
+                self.window.show_all()
         
-        keyval = event.keyval
-        keyname = Gdk.keyval_name(keyval)
-        
-        # Check if it's a shift key
-        if keyname in ['Shift_L', 'Shift_R']:
-            if SHIFT_STATE == 1:
-                SHIFT_STATE = 0
-                print(f"🔼 SHIFT RELEASE - {keyname}")
-                logger.debug(f"SHIFT RELEASE - {keyname}")
-                
-                # Show window if it was hidden by shift
-                if self.shift_hidden and self.is_visible:
-                    print("   → Showing window")
-                    logger.debug("Showing window due to shift release")
-                    self.shift_hidden = False
-                    if self.window:
-                        self.window.show_all()
-        
-        return False  # Allow event to propagate
+        return False  # Don't repeat
 
     def run(self):
         """Run the application"""
@@ -3088,6 +3094,9 @@ Examples:
     parser.add_argument('--delay', type=int, default=0, metavar='MILLISECONDS',
                         help='Delay in milliseconds before hiding the window (default: 0)')
 
+    parser.add_argument('--hide', type=float, default=0, metavar='SECONDS',
+                        help='Duration in seconds to hide window when shift key is pressed (default: 0 = disabled)')
+
     parser.add_argument('--recent', action='store_true',
                         help='Order thumbnails by most recently used (MRU), with recently selected windows appearing first')
 
@@ -3137,6 +3146,11 @@ Examples:
         parser.error("--delay must be non-negative")
     if args.delay > 10000:
         parser.error("--delay should not exceed 10000 milliseconds (10 seconds)")
+
+    if args.hide < 0:
+        parser.error("--hide must be non-negative")
+    if args.hide > 60:
+        parser.error("--hide should not exceed 60 seconds")
 
     return args
 

@@ -1,188 +1,114 @@
-# Otter Window Switcher - Unit Tests
+# Shift Key Detection Tests
 
-Comprehensive unit test suite to ensure code changes maintain functionality.
+This directory contains test programs to verify shift key detection functionality.
 
-## Test Coverage
+## Test Programs
 
-### `test_configuration.py`
-Tests for configuration and command-line argument parsing:
-- Default configuration values
-- Custom layout options (--nrows, --ncols)
-- Edge trigger options (--north, --south, --east, --west)
-- Mutually exclusive argument groups
-- Boolean flags (--notitle, --recent, --main-character)
-- Hide delay configuration
-- Thumbnail size settings
-- Combined option scenarios
-- Layout dimension calculations
-- MRU (Most Recently Used) ordering algorithm
-- Window ID generation and fallback logic
-- HIDE_STATE semaphore behavior
+### 1. simple_shift_test.py
+**Purpose:** Minimal test to verify Keybinder3 is working on your system
 
-### `test_edge_detection.py`
-Tests for mouse position and edge detection logic:
-- North/South/East/West edge trigger detection
-- Trigger threshold (5 pixel boundary)
-- Multi-monitor cursor detection
-- Monitor boundary handling
-- Mouse-in-window detection with buffer zones
-- Smart window positioning near cursor
-- Edge-aware position adjustments
-
-### `test_wnck_management.py`
-Tests for Wnck state management and stability:
-- Time-based Wnck recreation (every 120 seconds)
-- Count-based recreation (after 10,000 calls)
-- Recreation lock mechanism
-- Skip force_update after recreation flag
-- Wnck corruption detection (WnckClassGroup, hash_table errors)
-- Exception handling for Wnck calls (force_update, get_windows, get_application)
-- Window activation error handling
-- Fullscreen detection logic (--main-character mode)
-- System window filtering
-
-## Running Tests
-
-### Run All Tests
+**Usage:**
 ```bash
-cd tests
-./run_tests.py
+python3 tests/simple_shift_test.py
 ```
 
-Or:
+**What it does:**
+- Imports and initializes Keybinder3
+- Binds both shift keys
+- Prints a message every time you press a shift key
+- Press Ctrl+C to exit
+
+**Expected output:**
+```
+Starting shift key test...
+✓ Imports successful
+✓ GTK initialized
+✓ Keybinder initialized
+
+Binding shift keys...
+Left shift bound: True
+Right shift bound: True
+
+==================================================
+Press shift keys now (Ctrl+C to exit)
+==================================================
+
+>>> SHIFT KEY DETECTED: <Shift_L>
+>>> SHIFT KEY DETECTED: <Shift_R>
+```
+
+### 2. test_shift_key.py
+**Purpose:** Full-featured test with press/release detection
+
+**Usage:**
 ```bash
-python3 -m unittest discover tests
+python3 tests/test_shift_key.py
 ```
 
-### Run Specific Test Module
-```bash
-./run_tests.py test_configuration
-./run_tests.py test_edge_detection
-./run_tests.py test_wnck_management
+**What it does:**
+- Tests both shift key press and release detection
+- Uses polling to detect when shift is released
+- Counts total presses and releases
+- Shows summary on exit
+
+**Expected output:**
 ```
+============================================================
+Shift Key Detection Test Program
+============================================================
 
-### Run Individual Test Class
-```bash
-python3 -m unittest tests.test_configuration.TestConfigurationParsing
-python3 -m unittest tests.test_edge_detection.TestEdgeDetection
-python3 -m unittest tests.test_wnck_management.TestWnckRecreation
+This program tests Keybinder3 shift key detection.
+Press Ctrl+C to exit.
+
+✓ GTK initialized
+✓ Keybinder initialized
+
+Binding shift keys...
+✓ Left shift key bound
+✓ Right shift key bound
+
+============================================================
+Ready! Press shift keys to test detection.
+Press Ctrl+C to exit.
+============================================================
+
+🔽 SHIFT DOWN (press #1) - Key: <Shift_L>
+🔼 SHIFT RELEASE (release #1)
+🔽 SHIFT DOWN (press #2) - Key: <Shift_R>
+🔼 SHIFT RELEASE (release #2)
 ```
-
-### Run Individual Test Method
-```bash
-python3 -m unittest tests.test_configuration.TestConfigurationParsing.test_default_configuration
-```
-
-## Test Output
-
-Successful run:
-```
-======================================================================
-Otter Window Switcher - Unit Test Suite
-======================================================================
-
-Running all unit tests...
-
-test_combined_options (test_configuration.TestConfigurationParsing) ... ok
-test_default_configuration (test_configuration.TestConfigurationParsing) ... ok
-...
-----------------------------------------------------------------------
-Ran 45 tests in 0.023s
-
-OK
-
-======================================================================
-✓ ALL TESTS PASSED
-======================================================================
-```
-
-## Adding New Tests
-
-When adding new features to otter.py:
-
-1. **Create test methods** following the naming convention `test_<feature_name>`
-2. **Use descriptive docstrings** to explain what each test validates
-3. **Test edge cases** including invalid inputs, boundary conditions, and error scenarios
-4. **Mock external dependencies** (GTK, Wnck) to keep tests fast and isolated
-5. **Run tests** before committing changes
-
-Example test structure:
-```python
-def test_new_feature(self):
-    """Test description of what this validates"""
-    # Arrange - set up test data
-    expected_value = 42
-
-    # Act - call the function being tested
-    result = my_function()
-
-    # Assert - verify the result
-    self.assertEqual(result, expected_value)
-```
-
-## Continuous Integration
-
-These tests are designed to be run:
-- Before committing code changes
-- In CI/CD pipelines
-- After merging branches
-- Before releases
-
-## Test Philosophy
-
-These unit tests:
-- **Mock GTK/Wnck dependencies** - Don't require X11 or display server
-- **Test logic only** - Focus on algorithms and state management
-- **Run quickly** - Complete suite runs in under 1 second
-- **Isolate functionality** - Each test is independent
-- **Validate correctness** - Ensure changes don't break existing features
-
-## Coverage Goals
-
-Current coverage areas:
-- ✓ Configuration parsing
-- ✓ Layout calculations
-- ✓ Edge detection
-- ✓ Multi-monitor support
-- ✓ MRU ordering
-- ✓ Window positioning
-- ✓ Wnck state management
-- ✓ Error handling
-- ✓ Fullscreen detection
-- ✓ System filtering
-
-Future coverage:
-- Screenshot caching logic
-- Context menu operations
-- Workspace switching
-- Drag mode functionality
-- Thumbnail generation
-
-## Dependencies
-
-Tests use only Python standard library:
-- `unittest` - Test framework
-- `unittest.mock` - Mocking framework
-
-No GTK or Wnck required for unit tests!
 
 ## Troubleshooting
 
-**Import errors:**
+### Keybinder3 not available
+If you get an import error, install Keybinder3:
 ```bash
-# Make sure you're in the tests directory
-cd /home/src/otter/tests
-python3 run_tests.py
+sudo apt install gir1.2-keybinder-3.0
 ```
 
-**Module not found:**
-```bash
-# Run from project root
-cd /home/src/otter
-python3 -m unittest discover tests
-```
+### Segmentation fault or "cannot register existing type 'GdkDisplayManager'"
+This happens when GTK version is not specified before importing. The tests have been fixed to require GTK 3.0 explicitly, which is required by Keybinder3.
 
-**Permission denied:**
-```bash
-chmod +x tests/run_tests.py
-```
+**The fix:** Always call `gi.require_version('Gtk', '3.0')` BEFORE importing from `gi.repository`.
+
+### No shift keys detected
+1. Make sure you're running on X11 (not Wayland)
+2. Check if another application is capturing shift keys
+3. Try running with sudo (some systems require elevated permissions for global hotkeys)
+
+### Shift detection works in tests but not in otter.py
+1. Check that otter.py is printing the shift messages to stdout
+2. Look for "Keybinder initialized successfully" in the logs
+3. Verify the window is visible when you press shift (shift only hides visible windows)
+
+## Integration with Otter
+
+The shift key detection in otter.py works as follows:
+1. When otter window is visible and you press shift → window hides
+2. When you release shift → window shows again
+3. If window is not visible, shift key does nothing
+
+To see shift detection messages in otter.py, look for:
+- `🔽 SHIFT DOWN - <Shift_L>` or `<Shift_R>`
+- `🔼 SHIFT RELEASE`
+- `→ Hiding window` / `→ Showing window`
