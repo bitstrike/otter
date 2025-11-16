@@ -288,20 +288,25 @@ class OtterWindowSwitcher:
             return None
 
         try:
-            # Get current window list with lock protection
+            # Query Wnck directly for the window by XID
+            # This avoids circular dependency with get_user_windows()
             with self.wnck_lock:
                 if not self.screen_wnck:
                     return None
 
-                current_windows = self.get_user_windows()
-                for window_info in current_windows:
-                    window = window_info.get('window')
-                    if window and self.window_is_valid(window):
-                        try:
-                            if window.get_xid() == xid:
-                                return window
-                        except Exception:
-                            continue
+                # Get all windows and find matching XID
+                try:
+                    window_list = self.screen_wnck.get_windows()
+                    for window in window_list:
+                        if self.window_is_valid(window):
+                            try:
+                                if window.get_xid() == xid:
+                                    return window
+                            except Exception:
+                                continue
+                except Exception as e:
+                    logger.debug(f"Error querying windows for XID {xid}: {e}")
+                    
             return None
         except Exception as e:
             logger.debug(f"Error looking up window by XID {xid}: {e}")
@@ -457,8 +462,15 @@ class OtterWindowSwitcher:
                     # Update progress
                     self.update_startup_progress(i + 1, total_windows)
 
-                    # Capture screenshot
-                    window = window_info['window']
+                    # Capture screenshot - retrieve window fresh by XID
+                    xid = window_info.get('xid')
+                    if not xid:
+                        continue
+                    
+                    window = self.get_window_by_xid(xid)
+                    if not window:
+                        continue
+                        
                     screenshot = self.capture_high_quality_screenshot(window)
 
                     if screenshot:
@@ -595,7 +607,8 @@ class OtterWindowSwitcher:
                 try:
                     if self.screen_wnck:
                         current_windows = self.get_user_windows()
-                        existing_window_ids = {self.get_window_id(w['window']) for w in current_windows}
+                        # Use XID directly instead of window object
+                        existing_window_ids = {w['xid'] for w in current_windows if w.get('xid')}
                         cached_window_ids = set(self.screenshot_cache.keys())
 
                         for window_id in cached_window_ids - existing_window_ids:
@@ -611,7 +624,8 @@ class OtterWindowSwitcher:
             current_windows = self.get_user_windows()
 
             # Clean up cache for windows that no longer exist
-            existing_window_ids = {self.get_window_id(w['window']) for w in current_windows}
+            # Use XID directly instead of window object
+            existing_window_ids = {w['xid'] for w in current_windows if w.get('xid')}
             cached_window_ids = set(self.screenshot_cache.keys())
 
             for window_id in cached_window_ids - existing_window_ids:
@@ -637,7 +651,14 @@ class OtterWindowSwitcher:
             # Update screenshots for current windows
             for window_info in current_windows:
                 try:
-                    window = window_info['window']
+                    # Retrieve window fresh by XID
+                    xid = window_info.get('xid')
+                    if not xid:
+                        continue
+                    
+                    window = self.get_window_by_xid(xid)
+                    if not window:
+                        continue
 
                     # CRITICAL FIX: Validate window before attempting to capture screenshot
                     # Windows can close between get_user_windows() and capture_high_quality_screenshot()
@@ -645,7 +666,7 @@ class OtterWindowSwitcher:
                         logger.debug("Window became invalid before screenshot capture, skipping")
                         continue
 
-                    window_id = self.get_window_id(window)
+                    window_id = xid  # Use XID as window_id
 
                     # Capture screenshot with additional validation
                     try:
@@ -1253,13 +1274,16 @@ class OtterWindowSwitcher:
                                 import traceback
                                 logger.debug(f"Workspace error traceback: {traceback.format_exc()}")
 
+                            # CRITICAL: Do NOT store the Wnck window object itself!
+                            # Storing Wnck objects causes segfaults when they're accessed later
+                            # due to invalid WnckClassGroup pointers. Store only primitive data.
                             windows.append({
-                                'window': window,
+                                'window': None,  # Don't store Wnck object - retrieve fresh when needed
                                 'name': window_name,
                                 'app_name': app_name,
                                 'icon': icon,
                                 'is_minimized': is_minimized,
-                                'xid': xid,  # Cache XID for MRU sorting
+                                'xid': xid,  # Use XID to retrieve window object when needed
                                 'workspace_index': workspace_index,      # 1-indexed workspace number
                                 'workspace_name': workspace_name,        # Workspace name
                                 'window_type': str(window_type)          # Window type for listing
@@ -1325,7 +1349,15 @@ class OtterWindowSwitcher:
     def create_window_thumbnail(self, window_info: Dict) -> Gtk.Widget:
         """Create a thumbnail button for a window with workspace badge indicator"""
         try:
-            window = window_info['window']
+            # Retrieve window fresh by XID
+            xid = window_info.get('xid')
+            if not xid:
+                raise ValueError("No XID in window_info")
+            
+            window = self.get_window_by_xid(xid)
+            if not window:
+                raise ValueError(f"Window with XID {xid} no longer exists")
+            
             name = window_info['name']
             app_name = window_info['app_name']
             icon = window_info['icon']
@@ -2462,12 +2494,26 @@ class OtterWindowSwitcher:
                     except Exception as ws_error:
                         logger.debug(f"Could not move window to workspace: {ws_error}")
 
-            # Get current display geometry
+            # Get the monitor where the Otter window is displayed
+            # (not the mouse position, which might have moved)
             display = Gdk.Display.get_default()
-            seat = display.get_default_seat()
-            pointer = seat.get_pointer()
-            screen, x, y = pointer.get_position()
-            monitor = display.get_monitor_at_point(x, y)
+            monitor = None
+            
+            try:
+                if self.window and self.window.get_window():
+                    # Get Otter window position
+                    otter_x, otter_y = self.window.get_position()
+                    monitor = display.get_monitor_at_point(otter_x, otter_y)
+            except Exception as e:
+                logger.debug(f"Could not get Otter window position: {e}")
+            
+            if not monitor:
+                # Fallback to mouse position if window position unavailable
+                seat = display.get_default_seat()
+                pointer = seat.get_pointer()
+                screen, x, y = pointer.get_position()
+                monitor = display.get_monitor_at_point(x, y)
+            
             geometry = monitor.get_geometry()
 
             # Use set_geometry instead of move()
