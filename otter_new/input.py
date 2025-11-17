@@ -306,6 +306,9 @@ class EventHandler:
             
             current_workspace = screen.get_active_workspace()
             
+            # Update MRU timestamp (middle-click counts as interaction)
+            self.app.window_manager.update_mru_timestamp(xid)
+            
             # If already on current workspace, activate window
             if workspace == current_workspace:
                 timestamp = Gtk.get_current_event_time()
