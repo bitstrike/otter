@@ -195,6 +195,85 @@ class SwitcherWindow:
         except Exception as e:
             logger.error(f"Error applying styles: {e}")
     
+    def _apply_workspace_tint(self):
+        """Apply workspace color tint to window background if enabled"""
+        tint_percent = self.config.get('workspace_tint', 0)
+        if tint_percent <= 0:
+            return
+        
+        try:
+            # Get current workspace color
+            workspace_index = self._get_current_workspace_index()
+            if not workspace_index:
+                return
+            
+            workspace_color = self._get_workspace_color(workspace_index)
+            if not workspace_color:
+                return
+            
+            # Convert percentage to opacity (0-100 -> 0.0-1.0)
+            opacity = tint_percent / 100.0
+            
+            # Apply tint with user-specified opacity
+            css = f"""
+            window {{
+                background-color: alpha({workspace_color}, {opacity:.2f});
+            }}
+            """
+            
+            css_provider = Gtk.CssProvider()
+            css_provider.load_from_data(css.encode())
+            
+            self.window.get_style_context().add_provider(
+                css_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
+            )
+            
+            logger.debug(f"Applied workspace tint: {workspace_color} at {tint_percent}% opacity (WS {workspace_index})")
+        
+        except Exception as e:
+            logger.debug(f"Error applying workspace tint: {e}")
+    
+    def _get_current_workspace_index(self) -> Optional[int]:
+        """Get current workspace index (1-based)
+        
+        Returns:
+            Workspace index or None
+        """
+        try:
+            screen = self.window_manager.screen_wnck
+            if not screen:
+                return None
+            
+            active_workspace = screen.get_active_workspace()
+            if not active_workspace:
+                return None
+            
+            workspaces = screen.get_workspaces()
+            for idx, ws in enumerate(workspaces):
+                if ws == active_workspace:
+                    return idx + 1  # 1-based
+            
+            return None
+        except Exception as e:
+            logger.debug(f"Error getting current workspace: {e}")
+            return None
+    
+    def _get_workspace_color(self, workspace_index: Optional[int]) -> Optional[str]:
+        """Get color for workspace index
+        
+        Args:
+            workspace_index: Workspace number (1-based)
+            
+        Returns:
+            Color hex string or None
+        """
+        if not workspace_index:
+            return None
+        
+        color_index = (workspace_index - 1) % len(WORKSPACE_COLORS)
+        return WORKSPACE_COLORS[color_index]
+    
     def populate(self, windows: List[Dict]):
         """Populate window with thumbnails
         
@@ -421,6 +500,7 @@ class SwitcherWindow:
     
     def show(self):
         """Show the window"""
+        self._apply_workspace_tint()
         self.window.show_all()
         self.position_at_edge()
     

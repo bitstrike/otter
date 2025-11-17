@@ -336,11 +336,13 @@ class EventHandler:
         try:
             from .main import OtterState
             
-            # If in VISIBLE state, ensure window is on top
+            # If in VISIBLE state, update tint and ensure window is on top
             if self.app.otter_state == OtterState.VISIBLE:
                 if self.app.switcher_window and self.app.switcher_window.window:
+                    # Reapply workspace tint for new workspace
+                    self.app.switcher_window._apply_workspace_tint()
                     self.app.switcher_window.window.present()
-                    logger.debug("Otter redisplayed after workspace switch")
+                    logger.debug("Otter redisplayed after workspace switch (tint updated)")
             # If window became hidden during switch, show it again
             elif self.app.otter_state == OtterState.HIDDEN:
                 self.app.show_window()

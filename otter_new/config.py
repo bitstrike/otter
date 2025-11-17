@@ -53,6 +53,9 @@ Examples:
     parser.add_argument(
         '--notitle', action='store_true',
         help='Disable title bar')
+    parser.add_argument(
+        '--wtint', type=int, default=0, metavar='PERCENT',
+        help='Workspace color tint opacity percentage (0-100, default: 0 = disabled)')
 
     # Behavior
     parser.add_argument(
@@ -122,6 +125,8 @@ Examples:
         parser.error("--hide must be non-negative")
     if args.hide > 60:
         parser.error("--hide should not exceed 60 seconds")
+    if args.wtint < 0 or args.wtint > 100:
+        parser.error("--wtint must be between 0 and 100")
 
     return args
 
@@ -222,4 +227,5 @@ def args_to_config(args: argparse.Namespace) -> Dict:
         'recent': args.recent,
         'main_character': args.main_character,
         'ignore_list': ignore_list,
+        'workspace_tint': args.wtint,
     }
