@@ -141,17 +141,41 @@ class SwitcherWindow:
         title_bar.set_margin_start(10)
         title_bar.set_margin_end(10)
         
-        # Icon (if available)
+        # Application icon
         try:
-            icon = Gtk.Image.new_from_icon_name("preferences-system-windows", Gtk.IconSize.LARGE_TOOLBAR)
-            title_bar.pack_start(icon, False, False, 0)
-        except Exception:
-            pass
+            import os
+            icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images', 'app_icon.png')
+            if os.path.exists(icon_path):
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon_path, 32, 32, True)
+                icon_image = Gtk.Image.new_from_pixbuf(pixbuf)
+                icon_image.set_halign(Gtk.Align.START)
+                title_bar.pack_start(icon_image, False, False, 0)
+            else:
+                # Fallback to emoji if icon file not found
+                otter_label = Gtk.Label()
+                otter_label.set_markup("<span size='x-large'>🦦</span>")
+                otter_label.set_halign(Gtk.Align.START)
+                title_bar.pack_start(otter_label, False, False, 0)
+        except Exception as e:
+            logger.debug(f"Could not load app icon: {e}")
+            # Fallback to emoji
+            otter_label = Gtk.Label()
+            otter_label.set_markup("<span size='x-large'>🦦</span>")
+            otter_label.set_halign(Gtk.Align.START)
+            title_bar.pack_start(otter_label, False, False, 0)
         
         # Title
         title_label = Gtk.Label()
-        title_label.set_markup("<b>Window Switcher</b>")
-        title_bar.pack_start(title_label, False, False, 0)
+        title_label.set_markup("<span size='large' weight='bold'>Otter App Switcher</span>")
+        title_label.set_halign(Gtk.Align.CENTER)
+        title_label.set_hexpand(True)
+        title_bar.pack_start(title_label, True, True, 0)
+        
+        # Subtitle
+        subtitle_label = Gtk.Label()
+        subtitle_label.set_markup("<span size='small' alpha='70%'>Active Windows</span>")
+        subtitle_label.set_halign(Gtk.Align.END)
+        title_bar.pack_start(subtitle_label, False, False, 0)
         
         return title_bar
     

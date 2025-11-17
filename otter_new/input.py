@@ -319,9 +319,36 @@ class EventHandler:
                 timestamp = Gtk.get_current_event_time()
                 workspace.activate(timestamp)
                 logger.debug(f"Switched to workspace {workspace.get_name()}")
+                
+                # Schedule redisplay on new workspace after 200ms
+                # This ensures otter appears on the new workspace
+                GLib.timeout_add(200, self._redisplay_after_workspace_switch)
         
         except Exception as e:
             logger.error(f"Error handling middle-click: {e}")
+    
+    def _redisplay_after_workspace_switch(self) -> bool:
+        """Redisplay otter window after workspace switch from middle-click
+        
+        Returns:
+            False (don't repeat)
+        """
+        try:
+            from .main import OtterState
+            
+            # If in VISIBLE state, ensure window is on top
+            if self.app.otter_state == OtterState.VISIBLE:
+                if self.app.switcher_window and self.app.switcher_window.window:
+                    self.app.switcher_window.window.present()
+                    logger.debug("Otter redisplayed after workspace switch")
+            # If window became hidden during switch, show it again
+            elif self.app.otter_state == OtterState.HIDDEN:
+                self.app.show_window()
+                logger.info("Otter restored to visible after workspace switch")
+        except Exception as e:
+            logger.error(f"Error redisplaying otter after workspace switch: {e}")
+        
+        return False  # Don't repeat
     
     def on_scroll(self, widget, event) -> bool:
         """Handle mouse wheel scrolling
