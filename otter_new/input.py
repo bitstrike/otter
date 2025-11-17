@@ -129,6 +129,11 @@ class EdgeDetector:
                     if time_since_show < 0.3:  # 300ms grace period
                         return True
                 
+                # CRITICAL: If mouse is at edge, don't hide (prevents show/hide loop)
+                # The edge area is part of the safe zone when window is visible
+                if at_edge:
+                    return True
+                
                 # Check if mouse is in window first
                 mouse_in_window = self._mouse_in_window(x, y)
                 if mouse_in_window:
@@ -156,7 +161,7 @@ class EdgeDetector:
                             if in_hotbox:
                                 return True
                             
-                            # Mouse left hotbox - hide
+                            # Mouse left hotbox AND edge - hide
                             logger.debug("Mouse left hotbox - calling on_leave (hide)")
                             self.on_leave()
                     except Exception as e:
