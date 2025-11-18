@@ -196,7 +196,7 @@ class SwitcherWindow:
             logger.error(f"Error applying styles: {e}")
     
     def _apply_workspace_tint(self):
-        """Apply workspace color tint to window background if enabled"""
+        """Apply workspace color border around window if enabled"""
         tint_percent = self.config.get('workspace_tint', 0)
         if tint_percent <= 0:
             return
@@ -214,10 +214,11 @@ class SwitcherWindow:
             # Convert percentage to opacity (0-100 -> 0.0-1.0)
             opacity = tint_percent / 100.0
             
-            # Apply tint with user-specified opacity
+            # Apply colored border around entire window
             css = f"""
             window {{
-                background-color: alpha({workspace_color}, {opacity:.2f});
+                border: 3px solid alpha({workspace_color}, {opacity:.2f});
+                border-radius: 8px;
             }}
             """
             
@@ -229,10 +230,10 @@ class SwitcherWindow:
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
             )
             
-            logger.debug(f"Applied workspace tint: {workspace_color} at {tint_percent}% opacity (WS {workspace_index})")
+            logger.debug(f"Applied workspace border: {workspace_color} at {tint_percent}% opacity (WS {workspace_index})")
         
         except Exception as e:
-            logger.debug(f"Error applying workspace tint: {e}")
+            logger.debug(f"Error applying workspace border: {e}")
     
     def _get_current_workspace_index(self) -> Optional[int]:
         """Get current workspace index (1-based)

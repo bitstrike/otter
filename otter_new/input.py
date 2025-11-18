@@ -315,10 +315,13 @@ class EventHandler:
                 window.activate(timestamp)
                 self.app.hide_window()
             else:
-                # Switch to workspace without activating
+                # Switch to workspace and activate window
                 timestamp = Gtk.get_current_event_time()
                 workspace.activate(timestamp)
                 logger.debug(f"Switched to workspace {workspace.get_name()}")
+                
+                # Activate window after workspace switch (with delay)
+                GLib.timeout_add(100, lambda: self._activate_window_after_switch(xid))
                 
                 # Schedule redisplay on new workspace after 200ms
                 # This ensures otter appears on the new workspace
@@ -326,6 +329,26 @@ class EventHandler:
         
         except Exception as e:
             logger.error(f"Error handling middle-click: {e}")
+    
+    def _activate_window_after_switch(self, xid: int) -> bool:
+        """Activate window after workspace switch
+        
+        Args:
+            xid: Window XID
+            
+        Returns:
+            False (don't repeat)
+        """
+        try:
+            window = self.app.window_manager.get_window_by_xid(xid)
+            if window:
+                timestamp = Gtk.get_current_event_time()
+                window.activate(timestamp)
+                logger.debug(f"Activated window {xid} after workspace switch")
+        except Exception as e:
+            logger.debug(f"Error activating window after switch: {e}")
+        
+        return False  # Don't repeat
     
     def _redisplay_after_workspace_switch(self) -> bool:
         """Redisplay otter window after workspace switch from middle-click
