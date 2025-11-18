@@ -21,6 +21,7 @@ from .windows import WindowManager
 from .screenshots import ScreenshotManager
 from .input import EdgeDetector, ShiftMonitor, EventHandler
 from .ui import SwitcherWindow, ContextMenu
+from .tray import OtterTrayIcon
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,13 @@ class OtterApp:
         # Start state machine timer (checks every 100ms for DISABLED → VISIBLE transition)
         GLib.timeout_add(100, self._check_state_timer)
         
+        # Create system tray icon
+        self.tray_icon = OtterTrayIcon(
+            self,
+            self._on_tray_show,
+            self._on_tray_quit
+        )
+        
         logger.info("Otter application initialized")
     
     def _on_window_changed(self, screen, window=None):
@@ -144,6 +152,10 @@ class OtterApp:
             self.otter_state = OtterState.DISABLED
             self.next_show_time = time.time() + hide_duration
             
+            # Update tray icon to show disabled state
+            if hasattr(self, 'tray_icon'):
+                self.tray_icon.update_for_state(self.otter_state)
+            
             # Hide the window
             if self.switcher_window and self.switcher_window.window:
                 self.switcher_window.window.hide()
@@ -167,6 +179,10 @@ class OtterApp:
                 self.otter_state = OtterState.VISIBLE
                 self.next_show_time = None
                 
+                # Update tray icon to show normal state
+                if hasattr(self, 'tray_icon'):
+                    self.tray_icon.update_for_state(self.otter_state)
+                
                 # Show the window
                 if self.switcher_window.window:
                     self.switcher_window.window.show_all()
@@ -176,6 +192,18 @@ class OtterApp:
     def _on_menu_closed(self):
         """Handle context menu closed"""
         self.can_hide = True
+    
+    def _on_tray_show(self):
+        """Handle tray icon left-click - show window"""
+        logger.debug("Tray icon clicked - showing window")
+        if self.otter_state != OtterState.DISABLED:
+            self.show_window()
+    
+    def _on_tray_quit(self):
+        """Handle tray quit - exit application"""
+        logger.info("Quitting from tray icon")
+        self.cleanup()
+        Gtk.main_quit()
     
     def _update_screenshot_cache(self) -> bool:
         """Update screenshot cache periodically
@@ -333,6 +361,10 @@ class OtterApp:
         # Stop edge detector
         if hasattr(self, 'edge_detector'):
             self.edge_detector.stop()
+        
+        # Destroy tray icon
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.destroy()
         
         # Clear caches
         if hasattr(self, 'screenshot_manager'):
