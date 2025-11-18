@@ -318,13 +318,17 @@ class EventHandler:
                 # Switch to workspace and activate window
                 timestamp = Gtk.get_current_event_time()
                 workspace.activate(timestamp)
-                logger.debug(f"Switched to workspace {workspace.get_name()}")
+                logger.debug(f"[STATE] Switched to workspace {workspace.get_name()}, current state: {self.app.otter_state}")
+                
+                # Keep otter visible during workspace switch
+                # Don't hide the window - it should stay visible
+                logger.debug(f"[STATE] Keeping otter visible during workspace switch")
                 
                 # Activate window after workspace switch (with delay)
                 GLib.timeout_add(100, lambda: self._activate_window_after_switch(xid))
                 
                 # Schedule redisplay on new workspace after 200ms
-                # This ensures otter appears on the new workspace
+                # This ensures otter appears on the new workspace with updated tint
                 GLib.timeout_add(200, self._redisplay_after_workspace_switch)
         
         except Exception as e:
@@ -342,9 +346,11 @@ class EventHandler:
         try:
             window = self.app.window_manager.get_window_by_xid(xid)
             if window:
-                timestamp = Gtk.get_current_event_time()
+                # Use current time instead of event time (which is 0 in timeout)
+                import time
+                timestamp = int(time.time() * 1000) & 0xFFFFFFFF  # Convert to X11 timestamp
                 window.activate(timestamp)
-                logger.debug(f"Activated window {xid} after workspace switch")
+                logger.debug(f"Activated window {xid} after workspace switch (timestamp: {timestamp})")
         except Exception as e:
             logger.debug(f"Error activating window after switch: {e}")
         
@@ -359,17 +365,34 @@ class EventHandler:
         try:
             from .main import OtterState
             
-            # If in VISIBLE state, update tint and ensure window is on top
-            if self.app.otter_state == OtterState.VISIBLE:
-                if self.app.switcher_window and self.app.switcher_window.window:
-                    # Reapply workspace tint for new workspace
-                    self.app.switcher_window._apply_workspace_tint()
-                    self.app.switcher_window.window.present()
-                    logger.debug("Otter redisplayed after workspace switch (tint updated)")
-            # If window became hidden during switch, show it again
-            elif self.app.otter_state == OtterState.HIDDEN:
-                self.app.show_window()
-                logger.info("Otter restored to visible after workspace switch")
+            logger.debug(f"[STATE] _redisplay_after_workspace_switch called, current state: {self.app.otter_state}")
+            
+            # Always ensure window is visible after workspace switch
+            if self.app.switcher_window and self.app.switcher_window.window:
+                window = self.app.switcher_window.window
+                was_visible = window.get_visible()
+                logger.debug(f"[STATE] Window visible before redisplay: {was_visible}")
+                
+                # Reapply workspace tint for new workspace
+                self.app.switcher_window._apply_workspace_tint()
+                
+                # Always show window after workspace switch
+                window.show_all()
+                logger.debug(f"[STATE] Called show_all() on window")
+                
+                # Ensure window is on top
+                window.present()
+                logger.debug(f"[STATE] Called present() on window")
+                
+                # Ensure state is VISIBLE
+                if self.app.otter_state != OtterState.VISIBLE:
+                    logger.debug(f"[STATE] Changing state from {self.app.otter_state} to VISIBLE")
+                    self.app.otter_state = OtterState.VISIBLE
+                    self.app.last_show_time = time.time()  # Reset grace period
+                
+                is_visible = window.get_visible()
+                logger.debug(f"[STATE] Window visible after redisplay: {is_visible}")
+                logger.info(f"Otter redisplayed after workspace switch (state: {self.app.otter_state}, visible: {is_visible})")
         except Exception as e:
             logger.error(f"Error redisplaying otter after workspace switch: {e}")
         

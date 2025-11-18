@@ -94,6 +94,10 @@ class SwitcherWindow:
         self.window.set_accept_focus(True)
         self.window.set_can_focus(True)
         
+        # CRITICAL: Make window sticky so it appears on all workspaces
+        # This ensures the window follows when switching workspaces
+        self.window.stick()
+        
         # Main container
         main_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         

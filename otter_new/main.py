@@ -125,6 +125,7 @@ class OtterApp:
     
     def _on_edge_leave(self):
         """Handle edge leave - transition VISIBLE → HIDDEN"""
+        logger.debug(f"[STATE] _on_edge_leave called, current state: {self.otter_state}")
         if self.otter_state == OtterState.VISIBLE:
             self.hide_window()
     
@@ -221,7 +222,9 @@ class OtterApp:
     
     def hide_window(self):
         """Hide the switcher window"""
+        logger.debug(f"[STATE] hide_window called, can_hide: {self.can_hide}, state: {self.otter_state}")
         if not self.can_hide:
+            logger.debug(f"[STATE] hide_window blocked by can_hide flag")
             return
         
         try:
@@ -232,6 +235,7 @@ class OtterApp:
                 if self.delayed_hide_id:
                     GLib.source_remove(self.delayed_hide_id)
                 self.delayed_hide_id = GLib.timeout_add(delay, self._do_hide)
+                logger.debug(f"[STATE] Scheduled delayed hide ({delay}ms)")
             else:
                 # Immediate hide
                 self._do_hide()
