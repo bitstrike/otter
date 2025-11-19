@@ -56,6 +56,9 @@ Examples:
     parser.add_argument(
         '--wtint', type=int, default=0, metavar='PERCENT',
         help='Workspace color tint opacity percentage (0-100, default: 0 = disabled)')
+    parser.add_argument(
+        '--tooltip', action='store_true',
+        help='Show application name tooltips on thumbnails')
 
     # Behavior
     parser.add_argument(
@@ -228,4 +231,5 @@ def args_to_config(args: argparse.Namespace) -> Dict:
         'main_character': args.main_character,
         'ignore_list': ignore_list,
         'workspace_tint': args.wtint,
+        'show_tooltips': args.tooltip,
     }

@@ -46,6 +46,14 @@ def get_css_styles() -> str:
         padding: 10px;
     }
     
+    tooltip {
+        background-color: @theme_bg_color;
+        color: @theme_fg_color;
+        border: 1px solid @borders;
+        border-radius: 4px;
+        padding: 4px 8px;
+    }
+    
     .workspace-badge {
         border-radius: 4px;
         padding: 2px 6px;
@@ -366,6 +374,11 @@ class SwitcherWindow:
             vbox.pack_start(label, False, False, 0)
             
             button.add(vbox)
+            
+            # Set tooltip to application name (if enabled)
+            if self.config.get('show_tooltips', False):
+                app_name = window_info.get('app_name', name)
+                button.set_tooltip_text(app_name)
             
             # Connect events
             button.connect("clicked", self.event_handler.on_window_clicked, xid)

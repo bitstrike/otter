@@ -40,6 +40,51 @@ class WindowManager:
         # Initialize Wnck
         self._initialize_wnck()
     
+    def _get_app_name(self, window, window_name: str) -> str:
+        """Extract clean application name from window
+        
+        Args:
+            window: Wnck window object
+            window_name: Full window title
+            
+        Returns:
+            Clean application name
+        """
+        try:
+            # Try to get class group name (safer than get_application())
+            class_group_name = window.get_class_group_name()
+            if class_group_name and class_group_name.strip():
+                return class_group_name
+        except Exception as e:
+            logger.debug(f"Could not get class group name: {e}")
+        
+        try:
+            # Try to get class instance name
+            class_instance = window.get_class_instance_name()
+            if class_instance and class_instance.strip():
+                # Capitalize first letter for nicer display
+                return class_instance.capitalize()
+        except Exception as e:
+            logger.debug(f"Could not get class instance name: {e}")
+        
+        # Fallback: extract app name from window title
+        # Common patterns: "Title - AppName", "Title | AppName", "AppName: Title"
+        if " - " in window_name:
+            # Try last part after " - " (e.g., "Page Title - Mozilla Firefox")
+            parts = window_name.split(" - ")
+            return parts[-1].strip()
+        elif " | " in window_name:
+            # Try last part after " | "
+            parts = window_name.split(" | ")
+            return parts[-1].strip()
+        elif ": " in window_name:
+            # Try first part before ": " (e.g., "Firefox: Page Title")
+            parts = window_name.split(": ")
+            return parts[0].strip()
+        
+        # Last resort: use full window name
+        return window_name
+    
     def _initialize_wnck(self):
         """Initialize Wnck screen"""
         try:
@@ -224,7 +269,9 @@ class WindowManager:
                         
                         # Get window info
                         window_name = window.get_name() or "Unknown"
-                        app_name = window_name
+                        
+                        # Try to get clean application name
+                        app_name = self._get_app_name(window, window_name)
                         
                         # Check ignore list
                         is_ignored = any(
