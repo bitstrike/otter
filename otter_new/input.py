@@ -176,15 +176,17 @@ class EdgeDetector:
 class ShiftMonitor:
     """Monitors shift key for temporary hide"""
     
-    def __init__(self, hide_duration: float, on_shift_pressed: Callable):
+    def __init__(self, hide_duration: float, on_shift_pressed: Callable, custom_keyval: Optional[int] = None):
         """Initialize shift monitor
         
         Args:
             hide_duration: Duration to hide in seconds
             on_shift_pressed: Callback when shift is pressed (receives keyname)
+            custom_keyval: Optional custom key value (from --hidekey)
         """
         self.hide_duration = hide_duration
         self.on_shift_pressed = on_shift_pressed
+        self.custom_keyval = custom_keyval
         self.enabled = hide_duration > 0
     
     def setup(self, window):
@@ -197,7 +199,11 @@ class ShiftMonitor:
             return
         
         window.connect("key-press-event", self._on_key_press)
-        logger.info(f"Shift monitor enabled (hide for {self.hide_duration}s)")
+        
+        if self.custom_keyval:
+            logger.info(f"Hide key monitor enabled (keyval: 0x{self.custom_keyval:x}, hide for {self.hide_duration}s)")
+        else:
+            logger.info(f"Shift monitor enabled (hide for {self.hide_duration}s)")
     
     def _on_key_press(self, widget, event) -> bool:
         """Handle key press events
@@ -212,9 +218,19 @@ class ShiftMonitor:
         keyval = event.keyval
         keyname = Gdk.keyval_name(keyval)
         
-        # Check if it's a shift key
-        if keyname in ['Shift_L', 'Shift_R']:
-            logger.debug(f"Shift key detected: {keyname}")
+        # Debug: Log all key presses when verbose
+        logger.debug(f"Key press detected: {keyname} (keyval: 0x{keyval:x})")
+        
+        # Check for custom hide key first
+        if self.custom_keyval and keyval == self.custom_keyval:
+            logger.info(f"Custom hide key detected: {keyname} (keyval: 0x{keyval:x})")
+            self.on_shift_pressed(keyname)
+            return False
+        
+        # Check if it's a shift key (including ISO variants for international keyboards)
+        shift_keys = ['Shift_L', 'Shift_R', 'ISO_Left_Shift', 'ISO_Right_Shift']
+        if keyname in shift_keys:
+            logger.info(f"Shift key detected: {keyname}")
             self.on_shift_pressed(keyname)
         
         return False  # Propagate event

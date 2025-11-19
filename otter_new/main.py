@@ -97,7 +97,8 @@ class OtterApp:
         # Initialize shift monitor
         self.shift_monitor = ShiftMonitor(
             config.get('hide_duration', 0),
-            self._on_shift_pressed
+            self._on_shift_pressed,
+            config.get('hide_key')  # Custom keyval from --hidekey
         )
         self.shift_monitor.setup(self.switcher_window.window)
         
@@ -164,7 +165,7 @@ class OtterApp:
                     Gtk.main_iteration()
     
     def _check_state_timer(self) -> bool:
-        """Check state machine timer - handles DISABLED → VISIBLE transition
+        """Check state machine timer - handles DISABLED → HIDDEN transition
         
         Returns:
             True to continue timer
@@ -172,26 +173,51 @@ class OtterApp:
         if self.otter_state == OtterState.DISABLED and self.next_show_time is not None:
             current_time = time.time()
             if current_time >= self.next_show_time:
-                print("⏰ Shift hide timeout - Showing window")
-                logger.debug("State timer: DISABLED → VISIBLE transition")
+                print("⏰ Shift hide timeout - Re-enabling edge detection")
+                logger.debug("State timer: DISABLED → HIDDEN transition")
                 
-                # Transition to VISIBLE state
-                self.otter_state = OtterState.VISIBLE
+                # Transition to HIDDEN state (not VISIBLE!)
+                # Window stays hidden until mouse reaches edge again
+                self.otter_state = OtterState.HIDDEN
                 self.next_show_time = None
                 
                 # Update tray icon to show normal state
                 if hasattr(self, 'tray_icon'):
                     self.tray_icon.update_for_state(self.otter_state)
                 
-                # Show the window
-                if self.switcher_window.window:
-                    self.switcher_window.window.show_all()
+                # Don't show the window - let edge detector handle it
+                # This allows user to work near the edge without interference
+                logger.debug("Edge detection re-enabled, window remains hidden until edge trigger")
         
         return True  # Continue timer
     
     def _on_menu_closed(self):
         """Handle context menu closed"""
         self.can_hide = True
+    
+    def _ensure_window_focus(self) -> bool:
+        """Ensure window has keyboard focus for shift key detection
+        
+        Returns:
+            False (don't repeat)
+        """
+        try:
+            if self.switcher_window and self.switcher_window.window:
+                window = self.switcher_window.window
+                
+                # Try grab_focus
+                window.grab_focus()
+                
+                # Try setting focus on the GDK window
+                gdk_window = window.get_window()
+                if gdk_window:
+                    gdk_window.focus(Gtk.get_current_event_time())
+                
+                logger.debug("Window focus ensured for shift key detection")
+        except Exception as e:
+            logger.debug(f"Error ensuring window focus: {e}")
+        
+        return False  # Don't repeat
     
     def _on_tray_show(self):
         """Handle tray icon left-click - show window"""
@@ -243,7 +269,9 @@ class OtterApp:
             
             # Focus window for shift key detection
             self.switcher_window.window.present()
-            GLib.idle_add(self.switcher_window.window.grab_focus)
+            
+            # Try multiple methods to ensure focus
+            GLib.idle_add(self._ensure_window_focus)
         
         except Exception as e:
             logger.error(f"Error showing window: {e}")

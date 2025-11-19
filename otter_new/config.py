@@ -68,6 +68,9 @@ Examples:
         '--hide', type=float, default=0, metavar='SECONDS',
         help='Hide duration when shift pressed (default: 0 = disabled)')
     parser.add_argument(
+        '--hidekey', type=str, default=None, metavar='KEYSYM',
+        help='Custom hide key as hex keysym from xev (e.g., 0xffe1 for Shift_L)')
+    parser.add_argument(
         '--recent', action='store_true',
         help='Order by most recently used (MRU)')
     parser.add_argument(
@@ -130,6 +133,14 @@ Examples:
         parser.error("--hide should not exceed 60 seconds")
     if args.wtint < 0 or args.wtint > 100:
         parser.error("--wtint must be between 0 and 100")
+    
+    # Validate hidekey if provided
+    if args.hidekey:
+        try:
+            # Try to parse as hex
+            int(args.hidekey, 16)
+        except ValueError:
+            parser.error(f"--hidekey must be a valid hex number (e.g., 0xffe1), got: {args.hidekey}")
 
     return args
 
@@ -232,4 +243,5 @@ def args_to_config(args: argparse.Namespace) -> Dict:
         'ignore_list': ignore_list,
         'workspace_tint': args.wtint,
         'show_tooltips': args.tooltip,
+        'hide_key': int(args.hidekey, 16) if args.hidekey else None,
     }
