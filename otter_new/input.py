@@ -260,19 +260,28 @@ class EventHandler:
                 logger.warning(f"Window {xid} no longer exists")
                 return
             
+            # Validate window is still valid before activation
+            if not self.app.window_manager.window_is_valid(window):
+                logger.warning(f"Window {xid} is no longer valid")
+                return
+            
             # Update MRU
             self.app.window_manager.update_mru_timestamp(xid)
             
-            # Activate window
-            timestamp = Gtk.get_current_event_time()
-            window.activate(timestamp)
-            logger.debug(f"Activated window {xid}")
+            # Activate window with error handling
+            try:
+                timestamp = Gtk.get_current_event_time()
+                window.activate(timestamp)
+                logger.debug(f"Activated window {xid}")
+            except Exception as e:
+                logger.error(f"Error activating window {xid}: {e}")
+                return
             
-            # Hide switcher
-            self.app.hide_window()
+            # Defer hide to let activation complete and avoid BadDrawable
+            GLib.idle_add(self.app.hide_window)
         
         except Exception as e:
-            logger.error(f"Error activating window: {e}")
+            logger.error(f"Error in window click handler: {e}")
     
     def on_button_press(self, button, event, xid: int) -> bool:
         """Handle button press for context menu and middle-click
@@ -361,14 +370,28 @@ class EventHandler:
         """
         try:
             window = self.app.window_manager.get_window_by_xid(xid)
-            if window:
-                # Use current time instead of event time (which is 0 in timeout)
-                import time
-                timestamp = int(time.time() * 1000) & 0xFFFFFFFF  # Convert to X11 timestamp
+            if not window:
+                logger.debug(f"Window {xid} no longer exists after workspace switch")
+                return False
+            
+            # Validate window is still valid
+            if not self.app.window_manager.window_is_valid(window):
+                logger.debug(f"Window {xid} is no longer valid after workspace switch")
+                return False
+            
+            # Use current time instead of event time (which is 0 in timeout)
+            import time
+            timestamp = int(time.time() * 1000) & 0xFFFFFFFF  # Convert to X11 timestamp
+            
+            try:
                 window.activate(timestamp)
                 logger.debug(f"Activated window {xid} after workspace switch (timestamp: {timestamp})")
+            except Exception as e:
+                logger.error(f"Error activating window {xid} after workspace switch: {e}")
         except Exception as e:
-            logger.debug(f"Error activating window after switch: {e}")
+            logger.error(f"Error in _activate_window_after_switch: {e}")
+        
+        return False
         
         return False  # Don't repeat
     

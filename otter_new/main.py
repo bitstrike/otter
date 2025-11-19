@@ -305,13 +305,22 @@ class OtterApp:
         Returns:
             False (don't repeat)
         """
-        logger.debug("Hiding window - transitioning to HIDDEN")
+        try:
+            logger.debug("Hiding window - transitioning to HIDDEN")
+            
+            # Transition to HIDDEN state
+            self.otter_state = OtterState.HIDDEN
+            
+            # Hide with error handling to prevent BadDrawable crashes
+            try:
+                self.switcher_window.hide()
+            except Exception as e:
+                logger.error(f"Error hiding switcher window: {e}")
+            
+            self.delayed_hide_id = None
+        except Exception as e:
+            logger.error(f"Error in _do_hide: {e}")
         
-        # Transition to HIDDEN state
-        self.otter_state = OtterState.HIDDEN
-        
-        self.switcher_window.hide()
-        self.delayed_hide_id = None
         return False
     
     def _populate_windows(self):

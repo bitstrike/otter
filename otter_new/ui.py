@@ -765,12 +765,16 @@ class ContextMenu:
             
             # Activate window to bring it to front
             try:
-                import time
-                timestamp = int(time.time() * 1000) & 0xFFFFFFFF
-                window.activate(timestamp)
-                logger.debug("Activated window (brought to front)")
+                # Validate window is still valid before activation
+                if not self.window_manager.window_is_valid(window):
+                    logger.debug("Window is no longer valid, skipping activation")
+                else:
+                    import time
+                    timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+                    window.activate(timestamp)
+                    logger.debug("Activated window (brought to front)")
             except Exception as e:
-                logger.debug(f"Could not activate window: {e}")
+                logger.error(f"Could not activate window: {e}")
             
             # Refresh otter window list to update workspace badges
             try:
