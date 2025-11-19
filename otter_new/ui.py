@@ -2,7 +2,10 @@
 
 import logging
 from typing import Dict, List, Optional
-from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
+import gi
+
+gi.require_version("Wnck", "3.0")
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Wnck
 
 from .constants import WORKSPACE_COLORS
 from .geometry import get_pointer_position, get_monitor_at_point, get_monitor_geometry, position_window_at_edge, calculate_layout_dimensions
@@ -627,66 +630,178 @@ class ContextMenu:
             logger.error(f"Error showing context menu: {e}")
     
     def _on_move_to_display(self, menu_item, xid: int):
-        """Move window to current display and workspace"""
+        """Move window to current display and workspace
+        
+        Moves the selected window to:
+        1. The monitor where the mouse cursor is located
+        2. The current active workspace
+        3. Resizes if maximized to fit the new display
+        """
         try:
+            logger.info(f"Move to display requested for window XID {xid}")
+            
             window = self.window_manager.get_window_by_xid(xid)
             if not window:
+                logger.warning(f"Window {xid} not found")
                 return
             
-            # Move to current workspace first
+            # Log window info
+            try:
+                window_name = window.get_name()
+                logger.info(f"Moving window: {window_name}")
+            except Exception:
+                pass
+            
+            # Get monitor where mouse cursor is (current display)
+            x, y = get_pointer_position()
+            logger.debug(f"Mouse position: ({x}, {y})")
+            
+            monitor = get_monitor_at_point(x, y)
+            if not monitor:
+                logger.error("Could not get monitor at mouse position")
+                return
+            
+            monitor_geom = get_monitor_geometry(monitor)
+            logger.info(f"Target monitor geometry: {monitor_geom}")
+            
+            # Move to current workspace
             screen = self.window_manager.screen_wnck
             if screen:
                 active_workspace = screen.get_active_workspace()
                 if active_workspace:
                     try:
-                        window.move_to_workspace(active_workspace)
+                        current_workspace = window.get_workspace()
+                        if current_workspace != active_workspace:
+                            window.move_to_workspace(active_workspace)
+                            logger.debug(f"Moved window to workspace {active_workspace.get_name()}")
                     except Exception as e:
                         logger.debug(f"Could not move to workspace: {e}")
             
-            # Get monitor where Otter window is displayed (not mouse position)
-            monitor = None
+            # Check if window is maximized
+            is_maximized = False
             try:
-                from gi.repository import Gdk as GdkModule
-                display = GdkModule.Display.get_default()
-                
-                # Use switcher window position
-                if self.switcher_window and self.switcher_window.window:
-                    otter_x, otter_y = self.switcher_window.window.get_position()
-                    monitor = display.get_monitor_at_point(otter_x, otter_y)
+                is_maximized = window.is_maximized()
+                logger.debug(f"Window maximized: {is_maximized}")
             except Exception as e:
-                logger.debug(f"Could not get Otter window position: {e}")
+                logger.debug(f"Could not check maximized state: {e}")
             
-            if not monitor:
-                # Fallback to mouse position
-                x, y = get_pointer_position()
-                monitor = get_monitor_at_point(x, y)
-            
-            if not monitor:
-                return
-            
-            geom = get_monitor_geometry(monitor)
-            
-            # Get current window geometry to preserve size
-            try:
-                current_geom = window.get_geometry()
-                current_width = current_geom[2]
-                current_height = current_geom[3]
-            except Exception:
-                current_width = -1
-                current_height = -1
-            
-            # Move window with offset from edge, preserving size
-            window.set_geometry(
-                Wnck.WindowGravity.CURRENT,
-                Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y,
-                geom['x'] + 50,
-                geom['y'] + 50,
-                current_width,
-                current_height
-            )
+            if is_maximized:
+                # Unmaximize first, then move and resize to fit new display
+                try:
+                    logger.info("Unmaximizing window before move")
+                    window.unmaximize()
+                    
+                    # Wait a moment for unmaximize to complete
+                    GLib.timeout_add(100, lambda: self._finish_move_to_display(window, monitor_geom, True))
+                except Exception as e:
+                    logger.error(f"Could not unmaximize window: {e}")
+            else:
+                # Not maximized, just move it
+                logger.info("Moving window (not maximized)")
+                self._finish_move_to_display(window, monitor_geom, False)
         
         except Exception as e:
             logger.error(f"Error moving to display: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+    
+    def _finish_move_to_display(self, window, monitor_geom: Dict, was_maximized: bool) -> bool:
+        """Complete the move to display operation
+        
+        Args:
+            window: Wnck window object
+            monitor_geom: Monitor geometry dict
+            was_maximized: Whether window was maximized
+            
+        Returns:
+            False (don't repeat if called from timeout)
+        """
+        try:
+            logger.debug(f"_finish_move_to_display called (was_maximized={was_maximized})")
+            if was_maximized:
+                # Resize to fit new display (80% of monitor size)
+                new_width = int(monitor_geom['width'] * 0.8)
+                new_height = int(monitor_geom['height'] * 0.8)
+                new_x = monitor_geom['x'] + (monitor_geom['width'] - new_width) // 2
+                new_y = monitor_geom['y'] + (monitor_geom['height'] - new_height) // 2
+                
+                window.set_geometry(
+                    Wnck.WindowGravity.CURRENT,
+                    Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y |
+                    Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
+                    new_x, new_y, new_width, new_height
+                )
+                logger.debug(f"Resized window to fit display: {new_width}x{new_height} at ({new_x}, {new_y})")
+            else:
+                # Just move, preserve size
+                try:
+                    current_geom = window.get_geometry()
+                    current_width = current_geom[2]
+                    current_height = current_geom[3]
+                except Exception:
+                    current_width = 800
+                    current_height = 600
+                
+                # Center on new display
+                new_x = monitor_geom['x'] + (monitor_geom['width'] - current_width) // 2
+                new_y = monitor_geom['y'] + (monitor_geom['height'] - current_height) // 2
+                
+                # Ensure window fits on display
+                if current_width > monitor_geom['width']:
+                    current_width = int(monitor_geom['width'] * 0.9)
+                    new_x = monitor_geom['x'] + int(monitor_geom['width'] * 0.05)
+                
+                if current_height > monitor_geom['height']:
+                    current_height = int(monitor_geom['height'] * 0.9)
+                    new_y = monitor_geom['y'] + int(monitor_geom['height'] * 0.05)
+                
+                window.set_geometry(
+                    Wnck.WindowGravity.CURRENT,
+                    Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y |
+                    Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
+                    new_x, new_y, current_width, current_height
+                )
+                logger.debug(f"Moved window to display: {current_width}x{current_height} at ({new_x}, {new_y})")
+            
+            # Activate window to bring it to front
+            try:
+                import time
+                timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+                window.activate(timestamp)
+                logger.debug("Activated window (brought to front)")
+            except Exception as e:
+                logger.debug(f"Could not activate window: {e}")
+            
+            # Refresh otter window list to update workspace badges
+            try:
+                # Schedule refresh after a short delay to let window settle
+                GLib.timeout_add(200, self._refresh_window_list)
+            except Exception as e:
+                logger.debug(f"Could not schedule refresh: {e}")
+        
+        except Exception as e:
+            logger.error(f"Error finishing move to display: {e}")
+        
+        return False  # Don't repeat
+    
+    def _refresh_window_list(self) -> bool:
+        """Refresh the window list to update workspace badges
+        
+        Returns:
+            False (don't repeat)
+        """
+        try:
+            # Get updated window list
+            windows = self.window_manager.get_user_windows()
+            
+            # Repopulate switcher window
+            self.switcher_window.populate(windows)
+            
+            logger.debug("Refreshed window list after move")
+        except Exception as e:
+            logger.debug(f"Error refreshing window list: {e}")
+        
+        return False  # Don't repeat
     
     def _on_resize_to_display(self, menu_item, xid: int):
         """Resize window to current display"""
