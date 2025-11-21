@@ -4,6 +4,8 @@ import logging
 from typing import Dict, List, Optional
 import gi
 
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 gi.require_version("Wnck", "3.0")
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Wnck
 
@@ -324,6 +326,9 @@ class SwitcherWindow:
         
         # Show all new widgets
         self.grid.show_all()
+        
+        # Force window to resize to fit new content
+        self._force_window_resize()
     
     def _create_thumbnail_button(self, window_info: Dict) -> Optional[Gtk.Widget]:
         """Create thumbnail button for window
@@ -523,11 +528,90 @@ class SwitcherWindow:
         """Show the window"""
         self._apply_workspace_tint()
         self.window.show_all()
-        self.position_at_edge()
+        
+        # Ensure window is properly sized before positioning
+        # This handles cases where populate() was called while window was hidden
+        GLib.idle_add(self._ensure_proper_size_and_position)
+    
+    def _ensure_proper_size_and_position(self):
+        """Ensure window is properly sized and positioned
+        
+        Returns:
+            False (don't repeat)
+        """
+        try:
+            # Force resize to ensure proper size
+            self._force_window_resize()
+            
+            # Position at edge with correct size
+            self.position_at_edge()
+            
+        except Exception as e:
+            logger.error(f"Error ensuring proper size and position: {e}")
+        
+        return False
     
     def hide(self):
         """Hide the window"""
         self.window.hide()
+    
+    def _force_window_resize(self):
+        """Force window to resize to fit current content
+        
+        This fixes the issue where GTK windows don't automatically shrink
+        when content is removed, causing the window to stay oversized.
+        """
+        try:
+            # Method 1: Reset size constraints and use preferred size
+            self.window.set_size_request(-1, -1)
+            self.window.queue_resize()
+            
+            # Process pending events to let GTK calculate new size
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            
+            # Try to get preferred size and resize
+            try:
+                min_size, natural_size = self.window.get_preferred_size()
+                if natural_size.width > 0 and natural_size.height > 0:
+                    self.window.resize(natural_size.width, natural_size.height)
+                    logger.debug(f"Resized window to preferred size: {natural_size.width}x{natural_size.height}")
+                    return
+            except Exception as e:
+                logger.debug(f"Preferred size method failed: {e}")
+            
+            # Method 2: Calculate size based on grid content
+            try:
+                # Calculate expected size based on thumbnails
+                thumbnail_width = self.config.get('xsize', 160)
+                thumbnail_height = int(thumbnail_width * 0.75)
+                
+                # Get current grid dimensions
+                rows = 0
+                cols = 0
+                for child in self.grid.get_children():
+                    left = self.grid.child_get_property(child, 'left-attach')
+                    top = self.grid.child_get_property(child, 'top-attach')
+                    cols = max(cols, left + 1)
+                    rows = max(rows, top + 1)
+                
+                if rows > 0 and cols > 0:
+                    # Calculate window size: thumbnails + spacing + margins + title bar
+                    grid_width = cols * thumbnail_width + (cols - 1) * 8 + 20  # 8px spacing, 10px margins each side
+                    grid_height = rows * (thumbnail_height + 30) + (rows - 1) * 8 + 20  # 30px for label, 8px spacing, margins
+                    
+                    # Add title bar height if enabled
+                    if self.config.get('show_title', True):
+                        grid_height += 60  # Approximate title bar height
+                    
+                    self.window.resize(grid_width, grid_height)
+                    logger.debug(f"Resized window to calculated size: {grid_width}x{grid_height} (grid: {rows}x{cols})")
+                
+            except Exception as e:
+                logger.debug(f"Calculated size method failed: {e}")
+            
+        except Exception as e:
+            logger.error(f"Error forcing window resize: {e}")
 
 
 class ContextMenu:
