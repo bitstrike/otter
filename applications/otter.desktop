@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Otter
+Exec=/home/src/otter/otter.py --main-character --recent --north --xsize 150 --nrows 1 --notitle
+Icon=/home/src/otter/images/app_icon.png
+Terminal=false
+Categories=Utility;
+Comment=Launch Otter with custom configuration
