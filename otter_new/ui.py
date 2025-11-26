@@ -631,7 +631,7 @@ class ContextMenu:
     
     def show(self, xid: int):
         """Show context menu for window
-        
+
         Args:
             xid: Window XID
         """
@@ -640,28 +640,35 @@ class ContextMenu:
             if not window:
                 logger.warning(f"Window {xid} not found")
                 return
-            
+
             menu = Gtk.Menu()
-            
+
             # Move to current display
             item = Gtk.MenuItem(label="Move app to current display")
             item.connect("activate", self._on_move_to_display, xid)
             menu.append(item)
-            
+
             # Resize to current display
             item = Gtk.MenuItem(label="Resize app to current display")
             item.connect("activate", self._on_resize_to_display, xid)
             menu.append(item)
-            
+
             menu.append(Gtk.SeparatorMenuItem())
-            
+
             # Minimize
             item = Gtk.MenuItem(label="Minimize app")
             item.connect("activate", self._on_minimize, xid)
             menu.append(item)
-            
-            # Maximize
-            item = Gtk.MenuItem(label="Maximize app")
+
+            # Maximize/Restore (toggle based on current state)
+            maximize_label = "Maximize app"
+            try:
+                if window.is_maximized():
+                    maximize_label = "Restore app"
+            except Exception as e:
+                logger.debug(f"Could not check maximized state for menu label: {e}")
+
+            item = Gtk.MenuItem(label=maximize_label)
             item.connect("activate", self._on_maximize, xid)
             menu.append(item)
             
@@ -929,13 +936,33 @@ class ContextMenu:
             logger.error(f"Error minimizing: {e}")
     
     def _on_maximize(self, menu_item, xid: int):
-        """Maximize window"""
+        """Toggle window maximized state
+
+        If window is already maximized, unmaximize it (restore to previous size).
+        Otherwise, maximize the window.
+        """
         try:
             window = self.window_manager.get_window_by_xid(xid)
-            if window:
+            if not window:
+                return
+
+            # Check current maximized state
+            is_maximized = False
+            try:
+                is_maximized = window.is_maximized()
+            except Exception as e:
+                logger.debug(f"Could not check maximized state: {e}")
+
+            # Toggle the state
+            if is_maximized:
+                logger.debug(f"Window {xid} is maximized, unmaximizing...")
+                window.unmaximize()
+            else:
+                logger.debug(f"Window {xid} is not maximized, maximizing...")
                 window.maximize()
+
         except Exception as e:
-            logger.error(f"Error maximizing: {e}")
+            logger.error(f"Error toggling maximize: {e}")
     
     def _on_switch_to_app(self, menu_item, xid: int):
         """Switch to app (activate window and its workspace)"""
