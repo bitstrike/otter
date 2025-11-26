@@ -76,6 +76,9 @@ Examples:
     parser.add_argument(
         '--main-character', action='store_true',
         help='Disable trigger during fullscreen apps')
+    parser.add_argument(
+        '--toplist', type=float, default=0, metavar='SECONDS',
+        help='Reset scroll to top after N seconds of being hidden (default: 0 = disabled)')
 
     # Edge trigger (mutually exclusive)
     edge_group = parser.add_mutually_exclusive_group()
@@ -99,6 +102,9 @@ Examples:
     parser.add_argument(
         '--ignore', type=str, metavar='NAMES',
         help='Comma-separated window names to ignore')
+    parser.add_argument(
+        '--blacklist', type=str, metavar='NAMES',
+        help='Comma-separated window names that disable edge trigger')
 
     # Logging
     parser.add_argument(
@@ -131,6 +137,10 @@ Examples:
         parser.error("--hide must be non-negative")
     if args.hide > 60:
         parser.error("--hide should not exceed 60 seconds")
+    if args.toplist < 0:
+        parser.error("--toplist must be non-negative")
+    if args.toplist > 3600:
+        parser.error("--toplist should not exceed 3600 seconds")
     if args.wtint < 0 or args.wtint > 100:
         parser.error("--wtint must be between 0 and 100")
     
@@ -216,16 +226,20 @@ def validate_ignore_list(ignore_str: str) -> List[str]:
 
 def args_to_config(args: argparse.Namespace) -> Dict:
     """Convert parsed arguments to configuration dictionary
-    
+
     Args:
         args: Parsed command-line arguments
-        
+
     Returns:
         Configuration dictionary
     """
     ignore_list = []
     if hasattr(args, 'ignore') and args.ignore:
         ignore_list = [name.strip() for name in args.ignore.split(',')]
+
+    blacklist = []
+    if hasattr(args, 'blacklist') and args.blacklist:
+        blacklist = [name.strip() for name in args.blacklist.split(',')]
 
     return {
         'nrows': args.nrows,
@@ -234,6 +248,7 @@ def args_to_config(args: argparse.Namespace) -> Dict:
         'show_title': not args.notitle,
         'hide_delay': args.delay,
         'hide_duration': args.hide,
+        'toplist_duration': args.toplist,
         'north': args.north,
         'south': args.south,
         'east': args.east,
@@ -241,6 +256,7 @@ def args_to_config(args: argparse.Namespace) -> Dict:
         'recent': args.recent,
         'main_character': args.main_character,
         'ignore_list': ignore_list,
+        'blacklist_apps': blacklist,
         'workspace_tint': args.wtint,
         'show_tooltips': args.tooltip,
         'hide_key': int(args.hidekey, 16) if args.hidekey else None,

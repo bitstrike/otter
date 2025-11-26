@@ -12,24 +12,26 @@ logger = logging.getLogger(__name__)
 
 class EdgeDetector:
     """Detects mouse at screen edges"""
-    
-    def __init__(self, edge: str, on_trigger: Callable, on_leave: Callable, main_character: bool = False):
+
+    def __init__(self, edge: str, on_trigger: Callable, on_leave: Callable, main_character: bool = False, blacklist_apps: list = None):
         """Initialize edge detector
-        
+
         Args:
             edge: Edge to monitor ('north', 'south', 'east', 'west')
             on_trigger: Callback when edge is triggered
             on_leave: Callback when mouse leaves edge
             main_character: If True, disable during fullscreen
+            blacklist_apps: List of app names that disable trigger when focused
         """
         self.edge = edge
         self.on_trigger = on_trigger
         self.on_leave = on_leave
         self.main_character = main_character
+        self.blacklist_apps = blacklist_apps or []
         self.window_manager = None  # Set externally
         self.switcher_window = None  # Set externally to check if mouse is over window
         self.app = None  # Set externally to check state machine
-        
+
         self.monitor_id = None
     
     def start(self):
@@ -45,6 +47,30 @@ class EdgeDetector:
             self.monitor_id = None
             logger.info("Edge detector stopped")
     
+    def _is_active_window_blacklisted(self) -> bool:
+        """Check if the active window is in the blacklist
+
+        Returns:
+            True if active window is blacklisted
+        """
+        if not self.blacklist_apps or not self.window_manager:
+            return False
+
+        try:
+            active_window = self.window_manager.screen_wnck.get_active_window()
+            if not active_window:
+                return False
+
+            active_window_name = active_window.get_name()
+            if not active_window_name:
+                return False
+
+            # Case-sensitive exact match
+            return active_window_name in self.blacklist_apps
+        except Exception as e:
+            logger.debug(f"Error checking blacklist: {e}")
+            return False
+
     def _mouse_in_window(self, x: int, y: int) -> bool:
         """Check if mouse is within window bounds
         
@@ -114,7 +140,11 @@ class EdgeDetector:
                 if self.main_character and self.window_manager:
                     if self.window_manager.is_active_window_fullscreen():
                         return True
-                
+
+                # Check if active window is blacklisted
+                if self._is_active_window_blacklisted():
+                    return True
+
                 # Check if mouse is at edge
                 if at_edge:
                     logger.debug("Calling on_trigger (show)")

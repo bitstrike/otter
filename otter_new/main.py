@@ -49,6 +49,7 @@ class OtterApp:
         self.next_show_time = None  # When to transition from DISABLED to VISIBLE
         self.last_show_time = 0  # Track when window was last shown (for grace period)
         self.delayed_hide_id = None
+        self.toplist_reset_id = None  # Timer for toplist scroll reset
         self.can_hide = True  # Semaphore for context menu
         
         # Initialize GTK
@@ -88,7 +89,8 @@ class OtterApp:
             edge,
             self._on_edge_trigger,
             self._on_edge_leave,
-            config.get('main_character', False)
+            config.get('main_character', False),
+            config.get('blacklist_apps', [])
         )
         self.edge_detector.window_manager = self.window_manager
         self.edge_detector.switcher_window = self.switcher_window
@@ -254,25 +256,41 @@ class OtterApp:
             if self.otter_state == OtterState.DISABLED:
                 logger.debug("Skipping show_window - in DISABLED state")
                 return
-            
+
             logger.debug("Showing window - transitioning to VISIBLE")
-            
+
             # Transition to VISIBLE state
             self.otter_state = OtterState.VISIBLE
             self.last_show_time = time.time()  # Track when shown for grace period
-            
+
+            # Handle toplist: reset scroll to top if timeout expired
+            toplist_duration = self.config.get('toplist_duration', 0)
+            if toplist_duration > 0:
+                if self.toplist_reset_id:
+                    # Timer is still running, keep scroll position (don't reset)
+                    logger.debug("Keeping scroll position (toplist timeout still active)")
+                else:
+                    # Timer expired or not set, reset scroll to top
+                    try:
+                        adjustment = self.scroll_window.get_vadjustment()
+                        if adjustment:
+                            adjustment.set_value(0)
+                            logger.debug("Reset scroll to top (toplist timeout expired)")
+                    except Exception as e:
+                        logger.debug(f"Error resetting scroll: {e}")
+
             # Populate with windows
             self._populate_windows()
-            
+
             # Show window
             self.switcher_window.show()
-            
+
             # Focus window for shift key detection
             self.switcher_window.window.present()
-            
+
             # Try multiple methods to ensure focus
             GLib.idle_add(self._ensure_window_focus)
-        
+
         except Exception as e:
             logger.error(f"Error showing window: {e}")
     
@@ -301,26 +319,39 @@ class OtterApp:
     
     def _do_hide(self) -> bool:
         """Actually hide the window - transition to HIDDEN state
-        
+
         Returns:
             False (don't repeat)
         """
         try:
             logger.debug("Hiding window - transitioning to HIDDEN")
-            
+
             # Transition to HIDDEN state
             self.otter_state = OtterState.HIDDEN
-            
+
             # Hide with error handling to prevent BadDrawable crashes
             try:
                 self.switcher_window.hide()
             except Exception as e:
                 logger.error(f"Error hiding switcher window: {e}")
-            
+
             self.delayed_hide_id = None
+
+            # Start toplist timeout if enabled
+            toplist_duration = self.config.get('toplist_duration', 0)
+            if toplist_duration > 0:
+                # Cancel any existing timer
+                if self.toplist_reset_id:
+                    GLib.source_remove(self.toplist_reset_id)
+
+                # Set timer to re-enable scroll reset after duration
+                timeout_ms = int(toplist_duration * 1000)
+                self.toplist_reset_id = GLib.timeout_add(timeout_ms, self._on_toplist_timeout)
+                logger.debug(f"Started toplist timer ({toplist_duration}s)")
+
         except Exception as e:
             logger.error(f"Error in _do_hide: {e}")
-        
+
         return False
     
     def _populate_windows(self):
@@ -331,7 +362,17 @@ class OtterApp:
             self.switcher_window.populate(windows)
         except Exception as e:
             logger.error(f"Error populating windows: {e}")
-    
+
+    def _on_toplist_timeout(self) -> bool:
+        """Called when toplist timeout expires - clear the reset ID
+
+        Returns:
+            False (don't repeat)
+        """
+        self.toplist_reset_id = None
+        logger.debug("Toplist timeout expired - scroll will reset to top on next show")
+        return False
+
     def show_context_menu(self, xid: int):
         """Show context menu for window
         
