@@ -344,14 +344,17 @@ class EventHandler:
                 timestamp = Gtk.get_current_event_time()
                 workspace.activate(timestamp)
                 logger.debug(f"[STATE] Switched to workspace {workspace.get_name()}, current state: {self.app.otter_state}")
-                
+
                 # Keep otter visible during workspace switch
                 # Don't hide the window - it should stay visible
                 logger.debug(f"[STATE] Keeping otter visible during workspace switch")
-                
+
+                # Store the window XID to bring it to front after otter redisplay
+                self._pending_window_xid_for_stacking = xid
+
                 # Activate window after workspace switch (with delay)
                 GLib.timeout_add(100, lambda: self._activate_window_after_switch(xid))
-                
+
                 # Schedule redisplay on new workspace after 200ms
                 # This ensures otter appears on the new workspace with updated tint
                 GLib.timeout_add(200, self._redisplay_after_workspace_switch)
@@ -397,44 +400,50 @@ class EventHandler:
     
     def _redisplay_after_workspace_switch(self) -> bool:
         """Redisplay otter window after workspace switch from middle-click
-        
+
         Returns:
             False (don't repeat)
         """
         try:
             from .main import OtterState
-            
+
             logger.debug(f"[STATE] _redisplay_after_workspace_switch called, current state: {self.app.otter_state}")
-            
+
             # Always ensure window is visible after workspace switch
             if self.app.switcher_window and self.app.switcher_window.window:
                 window = self.app.switcher_window.window
                 was_visible = window.get_visible()
                 logger.debug(f"[STATE] Window visible before redisplay: {was_visible}")
-                
+
                 # Reapply workspace tint for new workspace
                 self.app.switcher_window._apply_workspace_tint()
-                
+
                 # Always show window after workspace switch
                 window.show_all()
                 logger.debug(f"[STATE] Called show_all() on window")
-                
+
                 # Ensure window is on top
                 window.present()
                 logger.debug(f"[STATE] Called present() on window")
-                
+
                 # Ensure state is VISIBLE
                 if self.app.otter_state != OtterState.VISIBLE:
                     logger.debug(f"[STATE] Changing state from {self.app.otter_state} to VISIBLE")
                     self.app.otter_state = OtterState.VISIBLE
                     self.app.last_show_time = time.time()  # Reset grace period
-                
+
                 is_visible = window.get_visible()
                 logger.debug(f"[STATE] Window visible after redisplay: {is_visible}")
                 logger.info(f"Otter redisplayed after workspace switch (state: {self.app.otter_state}, visible: {is_visible})")
+
+                # Bring the selected app window to front of other apps (below otter which has keep_above)
+                # This ensures the app is reordered to the top of other windows on the workspace
+                if hasattr(self, '_pending_window_xid_for_stacking') and self._pending_window_xid_for_stacking:
+                    GLib.timeout_add(50, lambda: self._bring_window_to_front_after_otter_display(self._pending_window_xid_for_stacking))
+                    self._pending_window_xid_for_stacking = None
         except Exception as e:
             logger.error(f"Error redisplaying otter after workspace switch: {e}")
-        
+
         return False  # Don't repeat
     
     def on_scroll(self, widget, event) -> bool:
@@ -497,18 +506,55 @@ class EventHandler:
     
     def on_leave_notify(self, widget, event) -> bool:
         """Handle mouse leaving window
-        
+
         Args:
             widget: GTK widget
             event: Crossing event
-            
+
         Returns:
             False
         """
         # Don't hide on leave-notify - let edge detector handle it
         # This prevents flickering when mouse moves within the window area
         return False
-    
+
+    def _bring_window_to_front_after_otter_display(self, xid: int) -> bool:
+        """Bring selected app window to front after otter is displayed
+
+        This ensures the app is on top of other windows (but below otter which has keep_above).
+        Called with a delay after otter is redisplayed to avoid z-order conflicts.
+
+        Args:
+            xid: Window XID
+
+        Returns:
+            False (don't repeat)
+        """
+        try:
+            window = self.app.window_manager.get_window_by_xid(xid)
+            if not window:
+                logger.debug(f"Window {xid} no longer exists")
+                return False
+
+            # Validate window is still valid
+            if not self.app.window_manager.window_is_valid(window):
+                logger.debug(f"Window {xid} is no longer valid")
+                return False
+
+            # Use current time instead of event time
+            import time
+            timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+
+            try:
+                window.activate(timestamp)
+                logger.debug(f"Brought window {xid} to front of other apps after otter display")
+            except Exception as e:
+                logger.error(f"Error bringing window {xid} to front: {e}")
+        except Exception as e:
+            logger.error(f"Error in _bring_window_to_front_after_otter_display: {e}")
+
+        return False
+
     def on_destroy(self, widget):
         """Handle window destruction
         
