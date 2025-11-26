@@ -165,6 +165,70 @@ def position_window_at_edge(
     return (x, y)
 
 
+def adjust_position_for_cursor(
+    pos_x: int,
+    pos_y: int,
+    cursor_x: int,
+    cursor_y: int,
+    window_width: int,
+    window_height: int,
+    edge: str,
+    monitor: Dict[str, int]
+) -> Tuple[int, int]:
+    """Adjust window position to be near cursor without occluding screen edges
+
+    Args:
+        pos_x: Initial X position from position_window_at_edge
+        pos_y: Initial Y position from position_window_at_edge
+        cursor_x: Current cursor X coordinate
+        cursor_y: Current cursor Y coordinate
+        window_width: Width of window
+        window_height: Height of window
+        edge: Edge name ('north', 'south', 'east', 'west')
+        monitor: Monitor geometry dictionary
+
+    Returns:
+        Tuple of adjusted (x, y) position
+    """
+    mon_x = monitor['x']
+    mon_y = monitor['y']
+    mon_width = monitor['width']
+    mon_height = monitor['height']
+
+    if edge == 'north' or edge == 'south':
+        # For north/south edges, adjust position based on cursor location
+        # Try to position window near cursor's X and Y coordinates
+        preferred_x = cursor_x - window_width // 2
+        preferred_y = cursor_y - window_height // 2
+
+        # Clamp X to screen bounds
+        min_x = mon_x
+        max_x = mon_x + mon_width - window_width
+        adjusted_x = max(min_x, min(preferred_x, max_x))
+
+        # Clamp Y to screen bounds
+        min_y = mon_y
+        max_y = mon_y + mon_height - window_height
+        adjusted_y = max(min_y, min(preferred_y, max_y))
+
+        return (adjusted_x, adjusted_y)
+
+    elif edge == 'east' or edge == 'west':
+        # For east/west edges, adjust X position based on cursor X
+        # Try to position window near cursor's X coordinate
+        preferred_x = cursor_x - window_width // 2
+
+        # Clamp to screen bounds
+        min_x = mon_x
+        max_x = mon_x + mon_width - window_width
+        adjusted_x = max(min_x, min(preferred_x, max_x))
+
+        return (adjusted_x, pos_y)
+
+    # Fallback: return original position
+    return (pos_x, pos_y)
+
+
 def check_edge_trigger(x: int, y: int, edge: str, monitor: Dict[str, int], threshold: int = 5) -> bool:
     """Check if pointer is at the specified edge
     

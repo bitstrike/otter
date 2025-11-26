@@ -10,7 +10,7 @@ gi.require_version("Wnck", "3.0")
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Wnck
 
 from .constants import WORKSPACE_COLORS
-from .geometry import get_pointer_position, get_monitor_at_point, get_monitor_geometry, position_window_at_edge, calculate_layout_dimensions
+from .geometry import get_pointer_position, get_monitor_at_point, get_monitor_geometry, position_window_at_edge, calculate_layout_dimensions, adjust_position_for_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -491,21 +491,21 @@ class SwitcherWindow:
             return None
     
     def position_at_edge(self):
-        """Position window at configured edge"""
+        """Position window at configured edge, near cursor"""
         try:
             # Get pointer position and monitor
-            x, y = get_pointer_position()
-            monitor = get_monitor_at_point(x, y)
+            cursor_x, cursor_y = get_pointer_position()
+            monitor = get_monitor_at_point(cursor_x, cursor_y)
             if not monitor:
                 return
-            
+
             monitor_geom = get_monitor_geometry(monitor)
-            
+
             # Get window size
             self.window.show_all()
             width = self.window.get_allocated_width()
             height = self.window.get_allocated_height()
-            
+
             # Determine edge
             edge = 'north'
             if self.config.get('south'):
@@ -514,13 +514,21 @@ class SwitcherWindow:
                 edge = 'east'
             elif self.config.get('west'):
                 edge = 'west'
-            
-            # Calculate position
+
+            # Calculate position at edge
             pos_x, pos_y = position_window_at_edge(width, height, edge, monitor_geom)
-            
+
+            # Adjust position to be near cursor without occluding screen edges
+            pos_x, pos_y = adjust_position_for_cursor(
+                pos_x, pos_y,
+                cursor_x, cursor_y,
+                width, height,
+                edge, monitor_geom
+            )
+
             # Move window
             self.window.move(pos_x, pos_y)
-        
+
         except Exception as e:
             logger.error(f"Error positioning window: {e}")
     
