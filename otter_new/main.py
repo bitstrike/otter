@@ -59,6 +59,9 @@ class OtterApp:
         self.window_manager = WindowManager(config, self._on_window_changed)
         self.screenshot_manager = ScreenshotManager(self.window_manager, config['xsize'])
         
+        # Give window manager access to screenshot manager for cache cleanup
+        self.window_manager.screenshot_manager = self.screenshot_manager
+        
         # Initialize event handler
         self.event_handler = EventHandler(self)
         
@@ -318,7 +321,7 @@ class OtterApp:
             logger.error(f"Error hiding window: {e}")
     
     def _do_hide(self) -> bool:
-        """Actually hide the window - transition to HIDDEN state
+        """Actually hide the window - transition to HIDDEN state with enhanced error handling
 
         Returns:
             False (don't repeat)
@@ -329,11 +332,21 @@ class OtterApp:
             # Transition to HIDDEN state
             self.otter_state = OtterState.HIDDEN
 
-            # Hide with error handling to prevent BadDrawable crashes
+            # Hide with comprehensive error handling to prevent BadDrawable crashes
             try:
-                self.switcher_window.hide()
+                if self.switcher_window and self.switcher_window.window:
+                    # Validate GDK window before hiding
+                    gdk_window = self.switcher_window.window.get_window()
+                    if gdk_window and not gdk_window.is_destroyed():
+                        self.switcher_window.hide()
+                        logger.debug("Window hidden successfully")
+                    else:
+                        logger.debug("GDK window is destroyed, skipping hide operation")
+                else:
+                    logger.debug("Switcher window not available for hiding")
             except Exception as e:
                 logger.error(f"Error hiding switcher window: {e}")
+                # Continue with state transition even if hide fails
 
             self.delayed_hide_id = None
 

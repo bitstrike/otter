@@ -293,29 +293,48 @@ class SwitcherWindow:
         return WORKSPACE_COLORS[color_index]
     
     def populate(self, windows: List[Dict]):
-        """Populate window with thumbnails
+        """Populate window with thumbnails with enhanced validation
         
         Args:
             windows: List of window info dictionaries
         """
         # Clear existing buttons
         for button in self.window_buttons:
-            button.destroy()
+            try:
+                button.destroy()
+            except Exception as e:
+                logger.debug(f"Error destroying button: {e}")
         self.window_buttons.clear()
         
         if not windows:
             logger.debug("No windows to display")
             return
         
+        # Filter out invalid windows before processing
+        valid_windows = []
+        for window_info in windows:
+            xid = window_info.get('xid')
+            if xid:
+                # Validate window still exists
+                window = self.window_manager.get_window_by_xid(xid)
+                if window and self.window_manager.window_is_valid(window):
+                    valid_windows.append(window_info)
+                else:
+                    logger.debug(f"Filtering out invalid window {xid}")
+        
+        if not valid_windows:
+            logger.debug("No valid windows to display after filtering")
+            return
+        
         # Calculate layout
         rows, cols = calculate_layout_dimensions(
-            len(windows),
+            len(valid_windows),
             self.config.get('nrows'),
             self.config.get('ncols', 4)
         )
         
-        # Create thumbnails
-        for idx, window_info in enumerate(windows):
+        # Create thumbnails for valid windows only
+        for idx, window_info in enumerate(valid_windows):
             row = idx // cols
             col = idx % cols
             
@@ -399,7 +418,7 @@ class SwitcherWindow:
             return None
     
     def _create_thumbnail(self, window_info: Dict) -> Optional[Gtk.Widget]:
-        """Create thumbnail image
+        """Create thumbnail image with enhanced validation
         
         Args:
             window_info: Window information dictionary
@@ -412,35 +431,65 @@ class SwitcherWindow:
             if not xid:
                 return None
             
+            # CRITICAL: Validate window still exists before drawing operations
+            window = self.window_manager.get_window_by_xid(xid)
+            if not window or not self.window_manager.window_is_valid(window):
+                # Remove from cache if invalid to prevent BadDrawable errors
+                if hasattr(self.screenshot_manager, 'screenshot_cache'):
+                    self.screenshot_manager.screenshot_cache.pop(xid, None)
+                if hasattr(self.screenshot_manager, 'last_valid_screenshots'):
+                    self.screenshot_manager.last_valid_screenshots.pop(xid, None)
+                logger.debug(f"Window {xid} is invalid, skipping thumbnail creation")
+                return None
+            
             # Try to get screenshot from cache
-            screenshot = self.screenshot_manager.screenshot_cache.get(xid)
+            screenshot = None
+            try:
+                screenshot = self.screenshot_manager.screenshot_cache.get(xid)
+            except Exception as e:
+                logger.debug(f"Error accessing screenshot cache for {xid}: {e}")
             
             if screenshot:
-                image = Gtk.Image.new_from_pixbuf(screenshot)
-                return image
+                try:
+                    image = Gtk.Image.new_from_pixbuf(screenshot)
+                    return image
+                except Exception as e:
+                    logger.debug(f"Error creating image from cached screenshot: {e}")
+                    # Remove corrupted cache entry
+                    self.screenshot_manager.screenshot_cache.pop(xid, None)
             
-            # Fallback to icon
+            # Fallback to icon with validation
             icon = window_info.get('icon')
             if icon:
-                # Scale icon to thumbnail size
-                width = self.config.get('xsize', 160)
-                height = int(width * 0.75)
-                
-                scaled_icon = icon.scale_simple(
-                    min(width, icon.get_width()),
-                    min(height, icon.get_height()),
-                    GdkPixbuf.InterpType.BILINEAR
-                )
-                
-                image = Gtk.Image.new_from_pixbuf(scaled_icon)
-                return image
+                try:
+                    # Validate icon pixbuf before using
+                    if icon.get_width() > 0 and icon.get_height() > 0:
+                        # Scale icon to thumbnail size
+                        width = self.config.get('xsize', 160)
+                        height = int(width * 0.75)
+                        
+                        scaled_icon = icon.scale_simple(
+                            min(width, icon.get_width()),
+                            min(height, icon.get_height()),
+                            GdkPixbuf.InterpType.BILINEAR
+                        )
+                        
+                        if scaled_icon:
+                            image = Gtk.Image.new_from_pixbuf(scaled_icon)
+                            return image
+                except Exception as e:
+                    logger.debug(f"Error creating image from icon: {e}")
             
             # Final fallback: generic icon
-            image = Gtk.Image.new_from_icon_name(
-                "application-x-executable",
-                Gtk.IconSize.DIALOG
-            )
-            return image
+            try:
+                image = Gtk.Image.new_from_icon_name(
+                    "application-x-executable",
+                    Gtk.IconSize.DIALOG
+                )
+                return image
+            except Exception as e:
+                logger.debug(f"Error creating fallback icon: {e}")
+                return None
         
         except Exception as e:
             logger.debug(f"Error creating thumbnail: {e}")
@@ -805,7 +854,7 @@ class ContextMenu:
             logger.debug(traceback.format_exc())
     
     def _finish_move_to_display(self, window, monitor_geom: Dict, was_maximized: bool) -> bool:
-        """Complete the move to display operation
+        """Complete the move to display operation with enhanced validation
         
         Args:
             window: Wnck window object
@@ -817,6 +866,12 @@ class ContextMenu:
         """
         try:
             logger.debug(f"_finish_move_to_display called (was_maximized={was_maximized})")
+            
+            # Validate window is still valid before operations
+            if not self.window_manager.window_is_valid(window):
+                logger.debug("Window is no longer valid, aborting move operation")
+                return False
+            
             if was_maximized:
                 # Resize to fit new display (80% of monitor size)
                 new_width = int(monitor_geom['width'] * 0.8)
@@ -824,13 +879,16 @@ class ContextMenu:
                 new_x = monitor_geom['x'] + (monitor_geom['width'] - new_width) // 2
                 new_y = monitor_geom['y'] + (monitor_geom['height'] - new_height) // 2
                 
-                window.set_geometry(
-                    Wnck.WindowGravity.CURRENT,
-                    Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y |
-                    Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
-                    new_x, new_y, new_width, new_height
-                )
-                logger.debug(f"Resized window to fit display: {new_width}x{new_height} at ({new_x}, {new_y})")
+                try:
+                    window.set_geometry(
+                        Wnck.WindowGravity.CURRENT,
+                        Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y |
+                        Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
+                        new_x, new_y, new_width, new_height
+                    )
+                    logger.debug(f"Resized window to fit display: {new_width}x{new_height} at ({new_x}, {new_y})")
+                except Exception as e:
+                    logger.error(f"Error setting window geometry: {e}")
             else:
                 # Just move, preserve size
                 try:
@@ -854,13 +912,16 @@ class ContextMenu:
                     current_height = int(monitor_geom['height'] * 0.9)
                     new_y = monitor_geom['y'] + int(monitor_geom['height'] * 0.05)
                 
-                window.set_geometry(
-                    Wnck.WindowGravity.CURRENT,
-                    Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y |
-                    Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
-                    new_x, new_y, current_width, current_height
-                )
-                logger.debug(f"Moved window to display: {current_width}x{current_height} at ({new_x}, {new_y})")
+                try:
+                    window.set_geometry(
+                        Wnck.WindowGravity.CURRENT,
+                        Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y |
+                        Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
+                        new_x, new_y, current_width, current_height
+                    )
+                    logger.debug(f"Moved window to display: {current_width}x{current_height} at ({new_x}, {new_y})")
+                except Exception as e:
+                    logger.error(f"Error setting window geometry: {e}")
             
             # Activate window to bring it to front
             try:

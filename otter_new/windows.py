@@ -102,7 +102,7 @@ class WindowManager:
             self.screen_wnck = None
     
     def window_is_valid(self, window) -> bool:
-        """Check if window object is still valid
+        """Enhanced window validation with X11 error handling
         
         Args:
             window: Wnck window object
@@ -114,8 +114,27 @@ class WindowManager:
             return False
         
         try:
+            # Multiple validation checks
             name = window.get_name()
-            return name is not None
+            if name is None:
+                return False
+            
+            # Try to get XID - this will fail for destroyed windows
+            xid = window.get_xid()
+            if not xid:
+                return False
+            
+            # Additional validation: check if window still exists in current screen
+            if self.screen_wnck:
+                try:
+                    current_windows = self.screen_wnck.get_windows()
+                    if current_windows and window not in current_windows:
+                        return False
+                except Exception:
+                    # If we can't get current windows, assume invalid
+                    return False
+            
+            return True
         except Exception:
             return False
     
@@ -190,6 +209,22 @@ class WindowManager:
         try:
             self.wnck_recreating = True
             logger.info(f"Recreating Wnck screen (calls: {self.wnck_call_count})")
+            
+            # CRITICAL: Clear all caches before recreation to prevent BadDrawable errors
+            try:
+                # Clear screenshot caches if available
+                if hasattr(self, 'screenshot_manager'):
+                    self.screenshot_manager.screenshot_cache.clear()
+                    if hasattr(self.screenshot_manager, 'last_valid_screenshots'):
+                        self.screenshot_manager.last_valid_screenshots.clear()
+                    logger.debug("Cleared screenshot caches during Wnck recreation")
+                
+                # Clear MRU timestamps for potentially invalid windows
+                self.mru_timestamps.clear()
+                logger.debug("Cleared MRU timestamps during Wnck recreation")
+                
+            except Exception as e:
+                logger.debug(f"Error clearing caches during recreation: {e}")
             
             time.sleep(0.2)  # Let old screen settle
             
