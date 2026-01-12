@@ -341,6 +341,13 @@ class EventHandler:
         return False
     
     def on_middle_click(self, xid: int):
+        # Middle-click behavior summary:
+        # - Updates MRU timestamp for the selected window.
+        # - If the window is on the current workspace: activate it and hide Otter.
+        # - If the window is on a different workspace: activate that workspace,
+        #   keep Otter visible, schedule activation of the app after ~100ms,
+        #   and redisplay Otter (with updated tint) after ~200ms so stacking
+        #   and workspace tinting behave correctly.
         """Handle middle-click (switch to workspace without activating)
         
         Args:
