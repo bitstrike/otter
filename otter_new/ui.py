@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def get_css_styles() -> str:
     """Get CSS styles for the application
-    
+
     Returns:
         CSS string
     """
@@ -27,7 +27,7 @@ def get_css_styles() -> str:
         border: 1px solid @borders;
         border-radius: 8px;
     }
-    
+
     .window-button {
         background-color: @theme_bg_color;
         border: 2px solid @borders;
@@ -35,22 +35,22 @@ def get_css_styles() -> str:
         padding: 8px;
         margin: 4px;
     }
-    
+
     .window-button:hover {
         background-color: @theme_selected_bg_color;
         border-color: @theme_selected_bg_color;
     }
-    
+
     .minimized-window-button {
         opacity: 0.6;
     }
-    
+
     .title-bar {
         background-color: @theme_bg_color;
         border-bottom: 1px solid @borders;
         padding: 10px;
     }
-    
+
     tooltip {
         background-color: @theme_bg_color;
         color: @theme_fg_color;
@@ -58,7 +58,7 @@ def get_css_styles() -> str:
         border-radius: 4px;
         padding: 4px 8px;
     }
-    
+
     .workspace-badge {
         border-radius: 4px;
         padding: 2px 6px;
@@ -71,10 +71,10 @@ def get_css_styles() -> str:
 
 class SwitcherWindow:
     """Main switcher window"""
-    
+
     def __init__(self, config: Dict, window_manager, screenshot_manager, event_handler):
         """Initialize switcher window
-        
+
         Args:
             config: Configuration dictionary
             window_manager: WindowManager instance
@@ -85,15 +85,15 @@ class SwitcherWindow:
         self.window_manager = window_manager
         self.screenshot_manager = screenshot_manager
         self.event_handler = event_handler
-        
+
         self.window = None
         self.scroll_window = None
         self.grid = None
         self.window_buttons = []
-        
+
         self._create_window()
         self._apply_styles()
-    
+
     def _create_window(self):
         """Create the main window"""
         self.window = Gtk.Window()
@@ -106,25 +106,25 @@ class SwitcherWindow:
         self.window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
         self.window.set_accept_focus(True)
         self.window.set_can_focus(True)
-        
+
         # CRITICAL: Make window sticky so it appears on all workspaces
         # This ensures the window follows when switching workspaces
         self.window.stick()
-        
+
         # Main container
         main_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        
+
         # Title bar (optional)
         if self.config.get('show_title', True):
             title_bar = self._create_title_bar()
             main_vbox.pack_start(title_bar, False, False, 0)
-        
+
         # Scrolled window for thumbnails
         self.scroll_window = Gtk.ScrolledWindow()
         self.scroll_window.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.scroll_window.set_min_content_height(200)
         self.scroll_window.set_max_content_height(800)
-        
+
         # Grid for thumbnails
         self.grid = Gtk.Grid()
         self.grid.set_row_spacing(8)
@@ -133,21 +133,21 @@ class SwitcherWindow:
         self.grid.set_margin_bottom(10)
         self.grid.set_margin_start(10)
         self.grid.set_margin_end(10)
-        
+
         self.scroll_window.add(self.grid)
         main_vbox.pack_start(self.scroll_window, True, True, 0)
-        
+
         self.window.add(main_vbox)
-        
+
         # Connect events
         self.window.connect("destroy", self.event_handler.on_destroy)
         self.window.connect("enter-notify-event", self.event_handler.on_enter_notify)
         self.window.connect("leave-notify-event", self.event_handler.on_leave_notify)
         self.scroll_window.connect("scroll-event", self.event_handler.on_scroll)
-    
+
     def _create_title_bar(self) -> Gtk.Widget:
         """Create title bar
-        
+
         Returns:
             Title bar widget
         """
@@ -157,7 +157,7 @@ class SwitcherWindow:
         title_bar.set_margin_bottom(10)
         title_bar.set_margin_start(10)
         title_bar.set_margin_end(10)
-        
+
         # Application icon
         try:
             import os
@@ -180,28 +180,28 @@ class SwitcherWindow:
             otter_label.set_markup("<span size='x-large'>🦦</span>")
             otter_label.set_halign(Gtk.Align.START)
             title_bar.pack_start(otter_label, False, False, 0)
-        
+
         # Title
         title_label = Gtk.Label()
         title_label.set_markup("<span size='large' weight='bold'>Otter App Switcher</span>")
         title_label.set_halign(Gtk.Align.CENTER)
         title_label.set_hexpand(True)
         title_bar.pack_start(title_label, True, True, 0)
-        
+
         # Subtitle
         subtitle_label = Gtk.Label()
         subtitle_label.set_markup("<span size='small' alpha='70%'>Active Windows</span>")
         subtitle_label.set_halign(Gtk.Align.END)
         title_bar.pack_start(subtitle_label, False, False, 0)
-        
+
         return title_bar
-    
+
     def _apply_styles(self):
         """Apply CSS styles"""
         try:
             css_provider = Gtk.CssProvider()
             css_provider.load_from_data(get_css_styles().encode())
-            
+
             screen = Gdk.Screen.get_default()
             style_context = Gtk.StyleContext()
             style_context.add_provider_for_screen(
@@ -211,26 +211,26 @@ class SwitcherWindow:
             )
         except Exception as e:
             logger.error(f"Error applying styles: {e}")
-    
+
     def _apply_workspace_tint(self):
         """Apply workspace color border around window if enabled"""
         tint_percent = self.config.get('workspace_tint', 0)
         if tint_percent <= 0:
             return
-        
+
         try:
             # Get current workspace color
             workspace_index = self._get_current_workspace_index()
             if not workspace_index:
                 return
-            
+
             workspace_color = self._get_workspace_color(workspace_index)
             if not workspace_color:
                 return
-            
+
             # Convert percentage to opacity (0-100 -> 0.0-1.0)
             opacity = tint_percent / 100.0
-            
+
             # Apply colored border around entire window
             css = f"""
             window {{
@@ -238,23 +238,23 @@ class SwitcherWindow:
                 border-radius: 8px;
             }}
             """
-            
+
             css_provider = Gtk.CssProvider()
             css_provider.load_from_data(css.encode())
-            
+
             self.window.get_style_context().add_provider(
                 css_provider,
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
             )
-            
+
             logger.debug(f"Applied workspace border: {workspace_color} at {tint_percent}% opacity (WS {workspace_index})")
-        
+
         except Exception as e:
             logger.debug(f"Error applying workspace border: {e}")
-    
+
     def _get_current_workspace_index(self) -> Optional[int]:
         """Get current workspace index (1-based)
-        
+
         Returns:
             Workspace index or None
         """
@@ -262,39 +262,39 @@ class SwitcherWindow:
             screen = self.window_manager.screen_wnck
             if not screen:
                 return None
-            
+
             active_workspace = screen.get_active_workspace()
             if not active_workspace:
                 return None
-            
+
             workspaces = screen.get_workspaces()
             for idx, ws in enumerate(workspaces):
                 if ws == active_workspace:
                     return idx + 1  # 1-based
-            
+
             return None
         except Exception as e:
             logger.debug(f"Error getting current workspace: {e}")
             return None
-    
+
     def _get_workspace_color(self, workspace_index: Optional[int]) -> Optional[str]:
         """Get color for workspace index
-        
+
         Args:
             workspace_index: Workspace number (1-based)
-            
+
         Returns:
             Color hex string or None
         """
         if not workspace_index:
             return None
-        
+
         color_index = (workspace_index - 1) % len(WORKSPACE_COLORS)
         return WORKSPACE_COLORS[color_index]
-    
+
     def populate(self, windows: List[Dict]):
         """Populate window with thumbnails with enhanced validation
-        
+
         Args:
             windows: List of window info dictionaries
         """
@@ -305,11 +305,11 @@ class SwitcherWindow:
             except Exception as e:
                 logger.debug(f"Error destroying button: {e}")
         self.window_buttons.clear()
-        
+
         if not windows:
             logger.debug("No windows to display")
             return
-        
+
         # Filter out invalid windows before processing
         valid_windows = []
         for window_info in windows:
@@ -321,40 +321,40 @@ class SwitcherWindow:
                     valid_windows.append(window_info)
                 else:
                     logger.debug(f"Filtering out invalid window {xid}")
-        
+
         if not valid_windows:
             logger.debug("No valid windows to display after filtering")
             return
-        
+
         # Calculate layout
         rows, cols = calculate_layout_dimensions(
             len(valid_windows),
             self.config.get('nrows'),
             self.config.get('ncols', 4)
         )
-        
+
         # Create thumbnails for valid windows only
         for idx, window_info in enumerate(valid_windows):
             row = idx // cols
             col = idx % cols
-            
+
             button = self._create_thumbnail_button(window_info)
             if button:
                 self.grid.attach(button, col, row, 1, 1)
                 self.window_buttons.append(button)
-        
+
         # Show all new widgets
         self.grid.show_all()
-        
+
         # Force window to resize to fit new content
         self._force_window_resize()
-    
+
     def _create_thumbnail_button(self, window_info: Dict) -> Optional[Gtk.Widget]:
         """Create thumbnail button for window
-        
+
         Args:
             window_info: Window information dictionary
-            
+
         Returns:
             Button widget or None
         """
@@ -362,67 +362,67 @@ class SwitcherWindow:
             xid = window_info.get('xid')
             if not xid:
                 return None
-            
+
             name = window_info.get('name', 'Unknown')
             is_minimized = window_info.get('is_minimized', False)
             workspace_index = window_info.get('workspace_index')
-            
+
             # Create button
             button = Gtk.Button()
             button.get_style_context().add_class("window-button")
             if is_minimized:
                 button.get_style_context().add_class("minimized-window-button")
             button.set_relief(Gtk.ReliefStyle.NONE)
-            
+
             # Create content box
             vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-            
+
             # Get thumbnail
             thumbnail = self._create_thumbnail(window_info)
             if thumbnail:
                 # Overlay for workspace badge
                 overlay = Gtk.Overlay()
                 overlay.add(thumbnail)
-                
+
                 # Add workspace badge if available
                 if workspace_index:
                     badge = self._create_workspace_badge(workspace_index)
                     if badge:
                         overlay.add_overlay(badge)
                         overlay.set_overlay_pass_through(badge, True)
-                
+
                 vbox.pack_start(overlay, False, False, 0)
-            
+
             # Window name label
             label = Gtk.Label()
             label.set_text(name)
             label.set_max_width_chars(20)
             label.set_ellipsize(3)  # ELLIPSIZE_END
             vbox.pack_start(label, False, False, 0)
-            
+
             button.add(vbox)
-            
+
             # Set tooltip to application name (if enabled)
             if self.config.get('show_tooltips', False):
                 app_name = window_info.get('app_name', name)
                 button.set_tooltip_text(app_name)
-            
+
             # Connect events
             button.connect("clicked", self.event_handler.on_window_clicked, xid)
             button.connect("button-press-event", self.event_handler.on_button_press, xid)
-            
+
             return button
-        
+
         except Exception as e:
             logger.error(f"Error creating thumbnail button: {e}")
             return None
-    
+
     def _create_thumbnail(self, window_info: Dict) -> Optional[Gtk.Widget]:
         """Create thumbnail image with enhanced validation
-        
+
         Args:
             window_info: Window information dictionary
-            
+
         Returns:
             Image widget or None
         """
@@ -430,7 +430,7 @@ class SwitcherWindow:
             xid = window_info.get('xid')
             if not xid:
                 return None
-            
+
             # CRITICAL: Validate window still exists before drawing operations
             window = self.window_manager.get_window_by_xid(xid)
             if not window or not self.window_manager.window_is_valid(window):
@@ -441,14 +441,14 @@ class SwitcherWindow:
                     self.screenshot_manager.last_valid_screenshots.pop(xid, None)
                 logger.debug(f"Window {xid} is invalid, skipping thumbnail creation")
                 return None
-            
+
             # Try to get screenshot from cache
             screenshot = None
             try:
                 screenshot = self.screenshot_manager.screenshot_cache.get(xid)
             except Exception as e:
                 logger.debug(f"Error accessing screenshot cache for {xid}: {e}")
-            
+
             if screenshot:
                 try:
                     image = Gtk.Image.new_from_pixbuf(screenshot)
@@ -457,7 +457,7 @@ class SwitcherWindow:
                     logger.debug(f"Error creating image from cached screenshot: {e}")
                     # Remove corrupted cache entry
                     self.screenshot_manager.screenshot_cache.pop(xid, None)
-            
+
             # Fallback to icon with validation
             icon = window_info.get('icon')
             if icon:
@@ -467,19 +467,19 @@ class SwitcherWindow:
                         # Scale icon to thumbnail size
                         width = self.config.get('xsize', 160)
                         height = int(width * 0.75)
-                        
+
                         scaled_icon = icon.scale_simple(
                             min(width, icon.get_width()),
                             min(height, icon.get_height()),
                             GdkPixbuf.InterpType.BILINEAR
                         )
-                        
+
                         if scaled_icon:
                             image = Gtk.Image.new_from_pixbuf(scaled_icon)
                             return image
                 except Exception as e:
                     logger.debug(f"Error creating image from icon: {e}")
-            
+
             # Final fallback: generic icon
             try:
                 image = Gtk.Image.new_from_icon_name(
@@ -490,17 +490,17 @@ class SwitcherWindow:
             except Exception as e:
                 logger.debug(f"Error creating fallback icon: {e}")
                 return None
-        
+
         except Exception as e:
             logger.debug(f"Error creating thumbnail: {e}")
             return None
-    
+
     def _create_workspace_badge(self, workspace_index: int) -> Optional[Gtk.Widget]:
         """Create workspace badge
-        
+
         Args:
             workspace_index: Workspace number (1-indexed)
-            
+
         Returns:
             Badge widget or None
         """
@@ -508,7 +508,7 @@ class SwitcherWindow:
             # Get color for workspace
             color_index = (workspace_index - 1) % len(WORKSPACE_COLORS)
             color = WORKSPACE_COLORS[color_index]
-            
+
             # Create label
             label = Gtk.Label()
             label.set_text(str(workspace_index))
@@ -517,7 +517,7 @@ class SwitcherWindow:
             label.set_valign(Gtk.Align.START)
             label.set_margin_top(5)
             label.set_margin_end(5)
-            
+
             # Apply color
             css = f"""
             .workspace-badge {{
@@ -525,20 +525,20 @@ class SwitcherWindow:
                 color: white;
             }}
             """
-            
+
             css_provider = Gtk.CssProvider()
             css_provider.load_from_data(css.encode())
             label.get_style_context().add_provider(
                 css_provider,
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
-            
+
             return label
-        
+
         except Exception as e:
             logger.debug(f"Error creating badge: {e}")
             return None
-    
+
     def position_at_edge(self):
         """Position window at configured edge, near cursor"""
         try:
@@ -580,41 +580,41 @@ class SwitcherWindow:
 
         except Exception as e:
             logger.error(f"Error positioning window: {e}")
-    
+
     def show(self):
         """Show the window"""
         self._apply_workspace_tint()
         self.window.show_all()
-        
+
         # Ensure window is properly sized before positioning
         # This handles cases where populate() was called while window was hidden
         GLib.idle_add(self._ensure_proper_size_and_position)
-    
+
     def _ensure_proper_size_and_position(self):
         """Ensure window is properly sized and positioned
-        
+
         Returns:
             False (don't repeat)
         """
         try:
             # Force resize to ensure proper size
             self._force_window_resize()
-            
+
             # Position at edge with correct size
             self.position_at_edge()
-            
+
         except Exception as e:
             logger.error(f"Error ensuring proper size and position: {e}")
-        
+
         return False
-    
+
     def hide(self):
         """Hide the window"""
         self.window.hide()
-    
+
     def _force_window_resize(self):
         """Force window to resize to fit current content
-        
+
         This fixes the issue where GTK windows don't automatically shrink
         when content is removed, causing the window to stay oversized.
         """
@@ -622,11 +622,11 @@ class SwitcherWindow:
             # Method 1: Reset size constraints and use preferred size
             self.window.set_size_request(-1, -1)
             self.window.queue_resize()
-            
+
             # Process pending events to let GTK calculate new size
             while Gtk.events_pending():
                 Gtk.main_iteration()
-            
+
             # Try to get preferred size and resize
             try:
                 min_size, natural_size = self.window.get_preferred_size()
@@ -636,13 +636,13 @@ class SwitcherWindow:
                     return
             except Exception as e:
                 logger.debug(f"Preferred size method failed: {e}")
-            
+
             # Method 2: Calculate size based on grid content
             try:
                 # Calculate expected size based on thumbnails
                 thumbnail_width = self.config.get('xsize', 160)
                 thumbnail_height = int(thumbnail_width * 0.75)
-                
+
                 # Get current grid dimensions
                 rows = 0
                 cols = 0
@@ -651,32 +651,32 @@ class SwitcherWindow:
                     top = self.grid.child_get_property(child, 'top-attach')
                     cols = max(cols, left + 1)
                     rows = max(rows, top + 1)
-                
+
                 if rows > 0 and cols > 0:
                     # Calculate window size: thumbnails + spacing + margins + title bar
                     grid_width = cols * thumbnail_width + (cols - 1) * 8 + 20  # 8px spacing, 10px margins each side
                     grid_height = rows * (thumbnail_height + 30) + (rows - 1) * 8 + 20  # 30px for label, 8px spacing, margins
-                    
+
                     # Add title bar height if enabled
                     if self.config.get('show_title', True):
                         grid_height += 60  # Approximate title bar height
-                    
+
                     self.window.resize(grid_width, grid_height)
                     logger.debug(f"Resized window to calculated size: {grid_width}x{grid_height} (grid: {rows}x{cols})")
-                
+
             except Exception as e:
                 logger.debug(f"Calculated size method failed: {e}")
-            
+
         except Exception as e:
             logger.error(f"Error forcing window resize: {e}")
 
 
 class ContextMenu:
     """Context menu for window operations"""
-    
+
     def __init__(self, window_manager, switcher_window, on_menu_closed: callable):
         """Initialize context menu
-        
+
         Args:
             window_manager: WindowManager instance
             switcher_window: SwitcherWindow instance (for position detection)
@@ -685,7 +685,7 @@ class ContextMenu:
         self.window_manager = window_manager
         self.switcher_window = switcher_window
         self.on_menu_closed = on_menu_closed
-    
+
     def show(self, xid: int):
         """Show context menu for window
 
@@ -728,23 +728,23 @@ class ContextMenu:
             item = Gtk.MenuItem(label=maximize_label)
             item.connect("activate", self._on_maximize, xid)
             menu.append(item)
-            
+
             menu.append(Gtk.SeparatorMenuItem())
-            
+
             # Switch to app (activate window)
             item = Gtk.MenuItem(label="Switch to app")
             item.connect("activate", self._on_switch_to_app, xid)
             menu.append(item)
-            
+
             # Go to app's workspace (without activating)
             item = Gtk.MenuItem(label="Go to app's workspace")
             item.connect("activate", self._on_go_to_workspace, xid)
             menu.append(item)
-            
+
             # Move to workspace submenu
             workspaces_item = Gtk.MenuItem(label="Move to Workspace")
             workspaces_menu = Gtk.Menu()
-            
+
             try:
                 screen = self.window_manager.screen_wnck
                 if screen:
@@ -757,62 +757,63 @@ class ContextMenu:
                         workspaces_menu.append(item)
             except Exception as e:
                 logger.debug(f"Error creating workspace menu: {e}")
-            
+
             workspaces_item.set_submenu(workspaces_menu)
             menu.append(workspaces_item)
-            
+
             menu.append(Gtk.SeparatorMenuItem())
-            
+
             # Drag mode
             item = Gtk.MenuItem(label="Drag App")
             item.connect("activate", self._on_drag_app, xid)
             menu.append(item)
-            
+
             # Connect close handler
             menu.connect("deactivate", lambda m: self.on_menu_closed())
-            
+
             menu.show_all()
             menu.popup_at_pointer(None)
-        
+
         except Exception as e:
             logger.error(f"Error showing context menu: {e}")
-    
+
     def _on_move_to_display(self, menu_item, xid: int):
-        """Move window to current display and workspace
-        
-        Moves the selected window to:
-        1. The monitor where the mouse cursor is located
-        2. The current active workspace
-        3. Resizes if maximized to fit the new display
+        """Move window to current display and workspace using two-step process
+
+        Step 1: Resize window (same as resize app to current display)
+        Step 2: Move window to center of target monitor
         """
         try:
             logger.info(f"Move to display requested for window XID {xid}")
-            
+
             window = self.window_manager.get_window_by_xid(xid)
             if not window:
                 logger.warning(f"Window {xid} not found")
+                self._show_otter_error_dialog("Window not found", "The selected window could not be found.")
                 return
-            
+
             # Log window info
+            window_name = "Unknown"
             try:
                 window_name = window.get_name()
                 logger.info(f"Moving window: {window_name}")
             except Exception:
                 pass
-            
+
             # Get monitor where mouse cursor is (current display)
             x, y = get_pointer_position()
             logger.debug(f"Mouse position: ({x}, {y})")
-            
+
             monitor = get_monitor_at_point(x, y)
             if not monitor:
                 logger.error("Could not get monitor at mouse position")
+                self._show_otter_error_dialog("Monitor Detection Failed", "Could not detect the target monitor.")
                 return
-            
+
             monitor_geom = get_monitor_geometry(monitor)
             logger.info(f"Target monitor geometry: {monitor_geom}")
-            
-            # Move to current workspace
+
+            # Move to current workspace first
             screen = self.window_manager.screen_wnck
             if screen:
                 active_workspace = screen.get_active_workspace()
@@ -824,61 +825,224 @@ class ContextMenu:
                             logger.debug(f"Moved window to workspace {active_workspace.get_name()}")
                     except Exception as e:
                         logger.debug(f"Could not move to workspace: {e}")
-            
-            # Check if window is maximized
+
+            # Handle maximized windows
             is_maximized = False
             try:
                 is_maximized = window.is_maximized()
                 logger.debug(f"Window maximized: {is_maximized}")
-            except Exception as e:
-                logger.debug(f"Could not check maximized state: {e}")
-            
-            if is_maximized:
-                # Unmaximize first, then move and resize to fit new display
-                try:
-                    logger.info("Unmaximizing window before move")
+                if is_maximized:
                     window.unmaximize()
-                    
-                    # Wait a moment for unmaximize to complete
-                    GLib.timeout_add(100, lambda: self._finish_move_to_display(window, monitor_geom, True))
-                except Exception as e:
-                    logger.error(f"Could not unmaximize window: {e}")
-            else:
-                # Not maximized, just move it
-                logger.info("Moving window (not maximized)")
-                self._finish_move_to_display(window, monitor_geom, False)
-        
+                    logger.info("Unmaximized window before move")
+            except Exception as e:
+                logger.debug(f"Could not check/change maximized state: {e}")
+
+            # Step 1: Resize window (same method as "resize app to current display")
+            success = self._resize_window_to_display(window, monitor_geom)
+            if not success:
+                self._show_otter_error_dialog(
+                    "Resize Failed",
+                    f"Could not resize '{window_name}' to fit the target display. The window may be restricted by the application or window manager."
+                )
+                return
+
+            # Step 2: Move window to center of target monitor (after short delay)
+            GLib.timeout_add(150, lambda: self._move_window_to_display_center(window, monitor_geom, window_name))
+
         except Exception as e:
             logger.error(f"Error moving to display: {e}")
+            self._show_otter_error_dialog("Move Operation Failed", f"An unexpected error occurred while moving the window: {str(e)}")
             import traceback
             logger.debug(traceback.format_exc())
-    
-    def _finish_move_to_display(self, window, monitor_geom: Dict, was_maximized: bool) -> bool:
+
+    def _resize_window_to_display(self, window, monitor_geom: Dict) -> bool:
+        """Resize window to fit target display (Step 1 of move operation)
+
+        Args:
+            window: Wnck window object
+            monitor_geom: Monitor geometry dict
+
+        Returns:
+            True if resize succeeded, False otherwise
+        """
+        try:
+            # Validate window is still valid
+            if not self.window_manager.window_is_valid(window):
+                logger.debug("Window is no longer valid, aborting resize")
+                return False
+
+            # Resize to 80% of monitor (same as "resize app to current display")
+            new_width = int(monitor_geom['width'] * 0.8)
+            new_height = int(monitor_geom['height'] * 0.8)
+
+            logger.debug(f"Resizing window to {new_width}x{new_height}")
+
+            window.set_geometry(
+                Wnck.WindowGravity.CURRENT,
+                Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
+                -1, -1,  # Position ignored
+                new_width, new_height
+            )
+
+            logger.debug("Window resize completed successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error resizing window: {e}")
+            return False
+
+    def _move_window_to_display_center(self, window, monitor_geom: Dict, window_name: str) -> bool:
+        """Move window to center of target display (Step 2 of move operation)
+
+        Args:
+            window: Wnck window object
+            monitor_geom: Monitor geometry dict
+            window_name: Window name for error reporting
+
+        Returns:
+            False (don't repeat if called from timeout)
+        """
+        try:
+            # Validate window is still valid
+            if not self.window_manager.window_is_valid(window):
+                logger.debug("Window is no longer valid, aborting move")
+                return False
+
+            # Get current window size after resize
+            try:
+                current_geom = window.get_geometry()
+                current_width = current_geom[2]
+                current_height = current_geom[3]
+            except Exception:
+                # Fallback to expected size from resize
+                current_width = int(monitor_geom['width'] * 0.8)
+                current_height = int(monitor_geom['height'] * 0.8)
+
+            # Calculate center position on target monitor
+            new_x = monitor_geom['x'] + (monitor_geom['width'] - current_width) // 2
+            new_y = monitor_geom['y'] + (monitor_geom['height'] - current_height) // 2
+
+            logger.debug(f"Moving window to center: ({new_x}, {new_y})")
+
+            # Move window (position only)
+            window.set_geometry(
+                Wnck.WindowGravity.CURRENT,
+                Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y,
+                new_x, new_y,
+                -1, -1  # Size ignored
+            )
+
+            # Activate window to bring it to front
+            try:
+                if self.window_manager.window_is_valid(window):
+                    import time
+                    timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+                    window.activate(timestamp)
+                    logger.debug("Activated window (brought to front)")
+            except Exception as e:
+                logger.debug(f"Could not activate window: {e}")
+
+            # Refresh otter window list to update workspace badges
+            try:
+                GLib.timeout_add(200, self._refresh_window_list)
+            except Exception as e:
+                logger.debug(f"Could not schedule refresh: {e}")
+
+            logger.info(f"Successfully moved '{window_name}' to target display")
+
+        except Exception as e:
+            logger.error(f"Error moving window to center: {e}")
+            self._show_otter_error_dialog(
+                "Move Failed",
+                f"Could not move '{window_name}' to the target display center. The window position may be restricted."
+            )
+
+        return False  # Don't repeat
+
+    def _show_otter_error_dialog(self, title: str, message: str):
+        """Show an otter-themed error dialog
+
+        Args:
+            title: Dialog title
+            message: Error message to display
+        """
+        try:
+            dialog = Gtk.MessageDialog(
+                transient_for=None,
+                flags=0,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.OK,
+                text=title
+            )
+
+            dialog.format_secondary_text(message)
+            dialog.set_title("Otter Window Switcher")
+
+            # Try to set otter icon
+            try:
+                import os
+                icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images', 'app_icon.png')
+                if os.path.exists(icon_path):
+                    dialog.set_icon_from_file(icon_path)
+                else:
+                    # Fallback: try to set a generic icon
+                    dialog.set_icon_name("dialog-warning")
+            except Exception as e:
+                logger.debug(f"Could not set dialog icon: {e}")
+
+            # Add otter emoji to make it more themed
+            dialog.set_markup(f"🦦 <b>{title}</b>")
+            dialog.format_secondary_markup(f"{message}\n\n<i>Some applications or window managers may restrict window operations.</i>")
+
+            # Make dialog modal and show
+            dialog.set_modal(True)
+            dialog.set_keep_above(True)
+
+            # Auto-close after 5 seconds
+            def auto_close():
+                try:
+                    dialog.response(Gtk.ResponseType.OK)
+                except Exception:
+                    pass
+                return False
+
+            GLib.timeout_add(5000, auto_close)
+
+            # Show dialog and handle response
+            response = dialog.run()
+            dialog.destroy()
+
+            logger.info(f"Showed otter error dialog: {title}")
+
+        except Exception as e:
+            logger.error(f"Error showing otter dialog: {e}")
+            # Fallback: print to console
+            print(f"🦦 Otter Error: {title} - {message}")
         """Complete the move to display operation with enhanced validation
-        
+
         Args:
             window: Wnck window object
             monitor_geom: Monitor geometry dict
             was_maximized: Whether window was maximized
-            
+
         Returns:
             False (don't repeat if called from timeout)
         """
         try:
             logger.debug(f"_finish_move_to_display called (was_maximized={was_maximized})")
-            
+
             # Validate window is still valid before operations
             if not self.window_manager.window_is_valid(window):
                 logger.debug("Window is no longer valid, aborting move operation")
                 return False
-            
+
             if was_maximized:
                 # Resize to fit new display (80% of monitor size)
                 new_width = int(monitor_geom['width'] * 0.8)
                 new_height = int(monitor_geom['height'] * 0.8)
                 new_x = monitor_geom['x'] + (monitor_geom['width'] - new_width) // 2
                 new_y = monitor_geom['y'] + (monitor_geom['height'] - new_height) // 2
-                
+
                 try:
                     window.set_geometry(
                         Wnck.WindowGravity.CURRENT,
@@ -898,20 +1062,20 @@ class ContextMenu:
                 except Exception:
                     current_width = 800
                     current_height = 600
-                
+
                 # Center on new display
                 new_x = monitor_geom['x'] + (monitor_geom['width'] - current_width) // 2
                 new_y = monitor_geom['y'] + (monitor_geom['height'] - current_height) // 2
-                
+
                 # Ensure window fits on display
                 if current_width > monitor_geom['width']:
                     current_width = int(monitor_geom['width'] * 0.9)
                     new_x = monitor_geom['x'] + int(monitor_geom['width'] * 0.05)
-                
+
                 if current_height > monitor_geom['height']:
                     current_height = int(monitor_geom['height'] * 0.9)
                     new_y = monitor_geom['y'] + int(monitor_geom['height'] * 0.05)
-                
+
                 try:
                     window.set_geometry(
                         Wnck.WindowGravity.CURRENT,
@@ -922,7 +1086,7 @@ class ContextMenu:
                     logger.debug(f"Moved window to display: {current_width}x{current_height} at ({new_x}, {new_y})")
                 except Exception as e:
                     logger.error(f"Error setting window geometry: {e}")
-            
+
             # Activate window to bring it to front
             try:
                 # Validate window is still valid before activation
@@ -935,66 +1099,66 @@ class ContextMenu:
                     logger.debug("Activated window (brought to front)")
             except Exception as e:
                 logger.error(f"Could not activate window: {e}")
-            
+
             # Refresh otter window list to update workspace badges
             try:
                 # Schedule refresh after a short delay to let window settle
                 GLib.timeout_add(200, self._refresh_window_list)
             except Exception as e:
                 logger.debug(f"Could not schedule refresh: {e}")
-        
+
         except Exception as e:
             logger.error(f"Error finishing move to display: {e}")
-        
+
         return False  # Don't repeat
-    
+
     def _refresh_window_list(self) -> bool:
         """Refresh the window list to update workspace badges
-        
+
         Returns:
             False (don't repeat)
         """
         try:
             # Get updated window list
             windows = self.window_manager.get_user_windows()
-            
+
             # Repopulate switcher window
             self.switcher_window.populate(windows)
-            
+
             logger.debug("Refreshed window list after move")
         except Exception as e:
             logger.debug(f"Error refreshing window list: {e}")
-        
+
         return False  # Don't repeat
-    
+
     def _on_resize_to_display(self, menu_item, xid: int):
         """Resize window to current display"""
         try:
             window = self.window_manager.get_window_by_xid(xid)
             if not window:
                 return
-            
+
             x, y = get_pointer_position()
             monitor = get_monitor_at_point(x, y)
             if not monitor:
                 return
-            
+
             geom = get_monitor_geometry(monitor)
-            
+
             # Resize to 80% of monitor
             new_width = int(geom['width'] * 0.8)
             new_height = int(geom['height'] * 0.8)
-            
+
             window.set_geometry(
                 Wnck.WindowGravity.CURRENT,
                 Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
                 -1, -1,
                 new_width, new_height
             )
-        
+
         except Exception as e:
             logger.error(f"Error resizing: {e}")
-    
+
     def _on_minimize(self, menu_item, xid: int):
         """Minimize window"""
         try:
@@ -1003,7 +1167,7 @@ class ContextMenu:
                 window.minimize()
         except Exception as e:
             logger.error(f"Error minimizing: {e}")
-    
+
     def _on_maximize(self, menu_item, xid: int):
         """Toggle window maximized state
 
@@ -1032,14 +1196,14 @@ class ContextMenu:
 
         except Exception as e:
             logger.error(f"Error toggling maximize: {e}")
-    
+
     def _on_switch_to_app(self, menu_item, xid: int):
         """Switch to app (activate window and its workspace)"""
         try:
             window = self.window_manager.get_window_by_xid(xid)
             if not window:
                 return
-            
+
             # Activate workspace first
             try:
                 workspace = window.get_workspace()
@@ -1048,70 +1212,70 @@ class ContextMenu:
                     workspace.activate(timestamp)
             except Exception as e:
                 logger.debug(f"Could not activate workspace: {e}")
-            
+
             # Then activate window
             try:
                 timestamp = Gtk.get_current_event_time()
                 window.activate(timestamp)
             except Exception as e:
                 logger.error(f"Could not activate window: {e}")
-            
+
             # Update MRU timestamp
             self.window_manager.update_mru_timestamp(xid)
-        
+
         except Exception as e:
             logger.error(f"Error switching to app: {e}")
-    
+
     def _on_go_to_workspace(self, menu_item, xid: int):
         """Go to window's workspace (without activating window)"""
         try:
             window = self.window_manager.get_window_by_xid(xid)
             if not window:
                 return
-            
+
             workspace = window.get_workspace()
             if workspace:
                 timestamp = Gtk.get_current_event_time()
                 workspace.activate(timestamp)
-        
+
         except Exception as e:
             logger.error(f"Error going to workspace: {e}")
-    
+
     def _on_move_to_workspace(self, menu_item, xid: int, workspace_num: int):
         """Move window to workspace"""
         try:
             window = self.window_manager.get_window_by_xid(xid)
             if not window:
                 return
-            
+
             screen = self.window_manager.screen_wnck
             if not screen:
                 return
-            
+
             workspaces = screen.get_workspaces()
             if workspace_num < len(workspaces):
                 workspace = workspaces[workspace_num]
                 window.move_to_workspace(workspace)
-        
+
         except Exception as e:
             logger.error(f"Error moving to workspace: {e}")
-    
+
     def _on_drag_app(self, menu_item, xid: int):
         """Start drag mode"""
         try:
             window = self.window_manager.get_window_by_xid(xid)
             if not window:
                 return
-            
+
             # Get window geometry
             geom = window.get_geometry()
             x, y, width, height = geom
-            
+
             # Calculate title bar center
             title_bar_height = 30
             center_x = x + width // 2
             center_y = y + title_bar_height // 2
-            
+
             # Warp cursor
             display = Gdk.Display.get_default()
             if display:
@@ -1121,13 +1285,13 @@ class ContextMenu:
                     if pointer:
                         screen = Gdk.Screen.get_default()
                         pointer.warp(screen, center_x, center_y)
-            
+
             # Activate window
             timestamp = Gtk.get_current_event_time()
             window.activate(timestamp)
-            
+
             # Start keyboard move
             GLib.timeout_add(100, lambda: window.keyboard_move())
-        
+
         except Exception as e:
             logger.error(f"Error starting drag: {e}")
