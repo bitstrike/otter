@@ -298,6 +298,19 @@ class EventHandler:
             
             # Update MRU
             self.app.window_manager.update_mru_timestamp(xid)
+
+            # Always attempt to raise/activate the window immediately on left-click.
+            # This is the primary action for left-click: bring the app to front.
+            try:
+                timestamp = Gtk.get_current_event_time()
+                # If event time is 0 (not available), fall back to current time
+                if not timestamp:
+                    import time
+                    timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+                window.activate(timestamp)
+                logger.debug(f"Activated (initial) window {xid} on left-click")
+            except Exception as e:
+                logger.debug(f"Initial activation failed for window {xid}: {e}")
             
             # Decide whether to simply raise (same display/workspace)
             try:
@@ -346,8 +359,8 @@ class EventHandler:
                     target_h = int(monitor_geom['height'] * 0.8)
                     size_already_fit = WindowOperator._is_size_close(win_geom[2], win_geom[3], target_w, target_h, tol=0.10)
 
-                # If window is already on current workspace and on same monitor and size fits, just raise it
-                if same_workspace and on_same_monitor and size_already_fit:
+                # If window is already on current workspace and on same monitor, just raise it
+                if same_workspace and on_same_monitor:
                     try:
                         timestamp = Gtk.get_current_event_time()
                         window.activate(timestamp)

@@ -8,6 +8,7 @@ appropriately sized on the current display (in which case we only raise it).
 
 import logging
 from gi.repository import GLib, Wnck
+from .geometry import get_monitor_at_point, get_monitor_geometry
 
 logger = logging.getLogger(__name__)
 
@@ -136,12 +137,31 @@ class WindowOperator:
                 fits_height = cur_h <= monitor_geom['height']
 
                 if fits_width and fits_height:
-                    # Compute target position clamped to monitor bounds so the
-                    # window remains fully visible while preserving its layout.
-                    target_x = max(monitor_geom['x'], min(cur_x, monitor_geom['x'] + monitor_geom['width'] - cur_w))
-                    target_y = max(monitor_geom['y'], min(cur_y, monitor_geom['y'] + monitor_geom['height'] - cur_h))
+                    # Preserve the window's position relative to its source monitor
+                    # rather than keeping absolute root coords. This maintains layout
+                    # from the source display when moving between monitors.
+                    try:
+                        # determine source monitor for the window (use center point)
+                        src_m = get_monitor_at_point(cur_x + cur_w // 2, cur_y + cur_h // 2)
+                        if src_m:
+                            src_geom = get_monitor_geometry(src_m)
+                            offset_x = cur_x - src_geom['x']
+                            offset_y = cur_y - src_geom['y']
+                        else:
+                            offset_x = cur_x
+                            offset_y = cur_y
+                    except Exception:
+                        offset_x = cur_x
+                        offset_y = cur_y
 
-                    logger.debug(f"WindowOperator: window fits on target monitor, moving to ({target_x},{target_y}) without resize")
+                    target_x = monitor_geom['x'] + offset_x
+                    target_y = monitor_geom['y'] + offset_y
+
+                    # Clamp so the window is fully visible on the target monitor
+                    target_x = max(monitor_geom['x'], min(int(target_x), monitor_geom['x'] + monitor_geom['width'] - cur_w))
+                    target_y = max(monitor_geom['y'], min(int(target_y), monitor_geom['y'] + monitor_geom['height'] - cur_h))
+
+                    logger.debug(f"WindowOperator: window fits on target monitor, moving to ({target_x},{target_y}) without resize (offset {offset_x},{offset_y})")
 
                     # One-shot move
                     def _move_once_no_resize():
