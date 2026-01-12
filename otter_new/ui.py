@@ -11,6 +11,7 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Wnck
 
 from .constants import WORKSPACE_COLORS
 from .geometry import get_pointer_position, get_monitor_at_point, get_monitor_geometry, position_window_at_edge, calculate_layout_dimensions, adjust_position_for_cursor
+from .window_operator import WindowOperator
 
 logger = logging.getLogger(__name__)
 
@@ -837,17 +838,21 @@ class ContextMenu:
             except Exception as e:
                 logger.debug(f"Could not check/change maximized state: {e}")
 
-            # Step 1: Resize window (same method as "resize app to current display")
-            success = self._resize_window_to_display(window, monitor_geom)
+            # Use shared helper to resize + move + activate (handles delays and validation)
+            success = WindowOperator.resize_and_move_to_display(
+                window,
+                monitor_geom,
+                app=None,
+                window_manager=self.window_manager,
+                hide_callback=lambda: GLib.timeout_add(200, self._refresh_window_list)
+            )
+
             if not success:
                 self._show_otter_error_dialog(
                     "Resize Failed",
                     f"Could not resize '{window_name}' to fit the target display. The window may be restricted by the application or window manager."
                 )
                 return
-
-            # Step 2: Move window to center of target monitor (after short delay)
-            GLib.timeout_add(150, lambda: self._move_window_to_display_center(window, monitor_geom, window_name))
 
         except Exception as e:
             logger.error(f"Error moving to display: {e}")
@@ -865,28 +870,13 @@ class ContextMenu:
         Returns:
             True if resize succeeded, False otherwise
         """
+        # Delegate to WindowOperator for resizing
         try:
-            # Validate window is still valid
             if not self.window_manager.window_is_valid(window):
                 logger.debug("Window is no longer valid, aborting resize")
                 return False
 
-            # Resize to 80% of monitor (same as "resize app to current display")
-            new_width = int(monitor_geom['width'] * 0.8)
-            new_height = int(monitor_geom['height'] * 0.8)
-
-            logger.debug(f"Resizing window to {new_width}x{new_height}")
-
-            window.set_geometry(
-                Wnck.WindowGravity.CURRENT,
-                Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
-                -1, -1,  # Position ignored
-                new_width, new_height
-            )
-
-            logger.debug("Window resize completed successfully")
-            return True
-
+            return WindowOperator.resize_to_display(window, monitor_geom)
         except Exception as e:
             logger.error(f"Error resizing window: {e}")
             return False
@@ -902,35 +892,13 @@ class ContextMenu:
         Returns:
             False (don't repeat if called from timeout)
         """
+        # Delegate to WindowOperator for positioning; schedule refresh
         try:
-            # Validate window is still valid
             if not self.window_manager.window_is_valid(window):
                 logger.debug("Window is no longer valid, aborting move")
                 return False
 
-            # Get current window size after resize
-            try:
-                current_geom = window.get_geometry()
-                current_width = current_geom[2]
-                current_height = current_geom[3]
-            except Exception:
-                # Fallback to expected size from resize
-                current_width = int(monitor_geom['width'] * 0.8)
-                current_height = int(monitor_geom['height'] * 0.8)
-
-            # Calculate center position on target monitor
-            new_x = monitor_geom['x'] + (monitor_geom['width'] - current_width) // 2
-            new_y = monitor_geom['y'] + (monitor_geom['height'] - current_height) // 2
-
-            logger.debug(f"Moving window to center: ({new_x}, {new_y})")
-
-            # Move window (position only)
-            window.set_geometry(
-                Wnck.WindowGravity.CURRENT,
-                Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y,
-                new_x, new_y,
-                -1, -1  # Size ignored
-            )
+            WindowOperator.move_to_display_center(window, monitor_geom)
 
             # Activate window to bring it to front
             try:
@@ -1018,99 +986,7 @@ class ContextMenu:
             logger.error(f"Error showing otter dialog: {e}")
             # Fallback: print to console
             print(f"🦦 Otter Error: {title} - {message}")
-        """Complete the move to display operation with enhanced validation
-
-        Args:
-            window: Wnck window object
-            monitor_geom: Monitor geometry dict
-            was_maximized: Whether window was maximized
-
-        Returns:
-            False (don't repeat if called from timeout)
-        """
-        try:
-            logger.debug(f"_finish_move_to_display called (was_maximized={was_maximized})")
-
-            # Validate window is still valid before operations
-            if not self.window_manager.window_is_valid(window):
-                logger.debug("Window is no longer valid, aborting move operation")
-                return False
-
-            if was_maximized:
-                # Resize to fit new display (80% of monitor size)
-                new_width = int(monitor_geom['width'] * 0.8)
-                new_height = int(monitor_geom['height'] * 0.8)
-                new_x = monitor_geom['x'] + (monitor_geom['width'] - new_width) // 2
-                new_y = monitor_geom['y'] + (monitor_geom['height'] - new_height) // 2
-
-                try:
-                    window.set_geometry(
-                        Wnck.WindowGravity.CURRENT,
-                        Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y |
-                        Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
-                        new_x, new_y, new_width, new_height
-                    )
-                    logger.debug(f"Resized window to fit display: {new_width}x{new_height} at ({new_x}, {new_y})")
-                except Exception as e:
-                    logger.error(f"Error setting window geometry: {e}")
-            else:
-                # Just move, preserve size
-                try:
-                    current_geom = window.get_geometry()
-                    current_width = current_geom[2]
-                    current_height = current_geom[3]
-                except Exception:
-                    current_width = 800
-                    current_height = 600
-
-                # Center on new display
-                new_x = monitor_geom['x'] + (monitor_geom['width'] - current_width) // 2
-                new_y = monitor_geom['y'] + (monitor_geom['height'] - current_height) // 2
-
-                # Ensure window fits on display
-                if current_width > monitor_geom['width']:
-                    current_width = int(monitor_geom['width'] * 0.9)
-                    new_x = monitor_geom['x'] + int(monitor_geom['width'] * 0.05)
-
-                if current_height > monitor_geom['height']:
-                    current_height = int(monitor_geom['height'] * 0.9)
-                    new_y = monitor_geom['y'] + int(monitor_geom['height'] * 0.05)
-
-                try:
-                    window.set_geometry(
-                        Wnck.WindowGravity.CURRENT,
-                        Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y |
-                        Wnck.WindowMoveResizeMask.WIDTH | Wnck.WindowMoveResizeMask.HEIGHT,
-                        new_x, new_y, current_width, current_height
-                    )
-                    logger.debug(f"Moved window to display: {current_width}x{current_height} at ({new_x}, {new_y})")
-                except Exception as e:
-                    logger.error(f"Error setting window geometry: {e}")
-
-            # Activate window to bring it to front
-            try:
-                # Validate window is still valid before activation
-                if not self.window_manager.window_is_valid(window):
-                    logger.debug("Window is no longer valid, skipping activation")
-                else:
-                    import time
-                    timestamp = int(time.time() * 1000) & 0xFFFFFFFF
-                    window.activate(timestamp)
-                    logger.debug("Activated window (brought to front)")
-            except Exception as e:
-                logger.error(f"Could not activate window: {e}")
-
-            # Refresh otter window list to update workspace badges
-            try:
-                # Schedule refresh after a short delay to let window settle
-                GLib.timeout_add(200, self._refresh_window_list)
-            except Exception as e:
-                logger.debug(f"Could not schedule refresh: {e}")
-
-        except Exception as e:
-            logger.error(f"Error finishing move to display: {e}")
-
-        return False  # Don't repeat
+        
 
     def _refresh_window_list(self) -> bool:
         """Refresh the window list to update workspace badges

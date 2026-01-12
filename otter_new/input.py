@@ -5,6 +5,7 @@ from typing import Callable, Optional
 from gi.repository import Gtk, Gdk, GLib
 
 from .geometry import get_pointer_position, get_monitor_at_point, get_monitor_geometry, check_edge_trigger
+from .window_operator import WindowOperator
 from .constants import EDGE_TRIGGER_THRESHOLD, MOUSE_POLL_INTERVAL
 
 logger = logging.getLogger(__name__)
@@ -298,17 +299,90 @@ class EventHandler:
             # Update MRU
             self.app.window_manager.update_mru_timestamp(xid)
             
-            # Activate window with error handling
+            # Decide whether to simply raise (same display/workspace)
             try:
-                timestamp = Gtk.get_current_event_time()
-                window.activate(timestamp)
-                logger.debug(f"Activated window {xid}")
+                screen = None
+                try:
+                    screen = self.app.window_manager.screen_wnck
+                except Exception:
+                    screen = None
+
+                active_workspace = None
+                try:
+                    if screen:
+                        active_workspace = screen.get_active_workspace()
+                except Exception:
+                    active_workspace = None
+
+                # Get pointer monitor geometry for current display
+                px, py = get_pointer_position()
+                monitor = get_monitor_at_point(px, py)
+                monitor_geom = None
+                try:
+                    if monitor:
+                        monitor_geom = get_monitor_geometry(monitor)
+                except Exception:
+                    monitor_geom = None
+
+                # Get target window workspace and geometry
+                try:
+                    win_workspace = window.get_workspace()
+                except Exception:
+                    win_workspace = None
+
+                try:
+                    win_geom = window.get_geometry()
+                except Exception:
+                    win_geom = None
+
+                same_workspace = (win_workspace is not None and active_workspace is not None and win_workspace == active_workspace)
+                on_same_monitor = False
+                size_already_fit = False
+
+                if win_geom and monitor_geom:
+                    on_same_monitor = WindowOperator._is_on_monitor(win_geom, monitor_geom)
+                    # Desired size = 80% of monitor
+                    target_w = int(monitor_geom['width'] * 0.8)
+                    target_h = int(monitor_geom['height'] * 0.8)
+                    size_already_fit = WindowOperator._is_size_close(win_geom[2], win_geom[3], target_w, target_h, tol=0.10)
+
+                # If window is already on current workspace and on same monitor and size fits, just raise it
+                if same_workspace and on_same_monitor and size_already_fit:
+                    try:
+                        timestamp = Gtk.get_current_event_time()
+                        window.activate(timestamp)
+                        logger.debug(f"Activated (raised) window {xid} on same display/workspace")
+                    except Exception as e:
+                        logger.error(f"Error activating window {xid}: {e}")
+                        return
+
+                    GLib.idle_add(self.app.hide_window)
+                else:
+                    # Cross-workspace or cross-monitor case: resize+move then raise
+                    try:
+                        if not monitor_geom:
+                            # Fallback: use pointer monitor again, but if still missing, perform normal activate
+                            timestamp = Gtk.get_current_event_time()
+                            window.activate(timestamp)
+                            GLib.idle_add(self.app.hide_window)
+                        else:
+                            WindowOperator.resize_and_move_to_display(
+                                window,
+                                monitor_geom,
+                                app=self.app,
+                                window_manager=self.app.window_manager,
+                                hide_callback=lambda: GLib.idle_add(self.app.hide_window)
+                            )
+                    except Exception as e:
+                        logger.error(f"Error during resize/move sequence for window {xid}: {e}")
+                        try:
+                            timestamp = Gtk.get_current_event_time()
+                            window.activate(timestamp)
+                            GLib.idle_add(self.app.hide_window)
+                        except Exception:
+                            pass
             except Exception as e:
-                logger.error(f"Error activating window {xid}: {e}")
-                return
-            
-            # Defer hide to let activation complete and avoid BadDrawable
-            GLib.idle_add(self.app.hide_window)
+                logger.error(f"Error in window click handler: {e}")
         
         except Exception as e:
             logger.error(f"Error in window click handler: {e}")
