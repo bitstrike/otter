@@ -126,7 +126,68 @@ class WindowOperator:
             except Exception:
                 pass
 
-            # Resize
+            # Check whether the window's current geometry will fit on the
+            # destination monitor without resizing. If so, preserve size and
+            # adjust position to keep the same layout where possible.
+            try:
+                current_geom = window.get_geometry()
+                cur_x, cur_y, cur_w, cur_h = current_geom
+                fits_width = cur_w <= monitor_geom['width']
+                fits_height = cur_h <= monitor_geom['height']
+
+                if fits_width and fits_height:
+                    # Compute target position clamped to monitor bounds so the
+                    # window remains fully visible while preserving its layout.
+                    target_x = max(monitor_geom['x'], min(cur_x, monitor_geom['x'] + monitor_geom['width'] - cur_w))
+                    target_y = max(monitor_geom['y'], min(cur_y, monitor_geom['y'] + monitor_geom['height'] - cur_h))
+
+                    logger.debug(f"WindowOperator: window fits on target monitor, moving to ({target_x},{target_y}) without resize")
+
+                    # One-shot move
+                    def _move_once_no_resize():
+                        try:
+                            window.set_geometry(
+                                Wnck.WindowGravity.CURRENT,
+                                Wnck.WindowMoveResizeMask.X | Wnck.WindowMoveResizeMask.Y,
+                                int(target_x), int(target_y),
+                                -1, -1
+                            )
+                        except Exception as e:
+                            logger.debug(f"WindowOperator._move_once_no_resize error: {e}")
+                        return False
+
+                    GLib.timeout_add(150, _move_once_no_resize)
+
+                    # Activate and optionally hide after a short delay
+                    def _activate_and_hide_no_resize():
+                        try:
+                            import time as _t
+                            if window_manager and not window_manager.window_is_valid(window):
+                                return False
+
+                            timestamp = int(_t.time() * 1000) & 0xFFFFFFFF
+                            try:
+                                window.activate(timestamp)
+                                logger.debug("WindowOperator: activated window after move (no resize)")
+                            except Exception as e:
+                                logger.debug(f"WindowOperator: activation failed: {e}")
+
+                            if hide_callback:
+                                try:
+                                    hide_callback()
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            logger.debug(f"WindowOperator._activate_and_hide_no_resize error: {e}")
+                        return False
+
+                    GLib.timeout_add(300, _activate_and_hide_no_resize)
+                    return True
+            except Exception:
+                # If we can't determine current geometry, fall back to resize path
+                pass
+
+            # Resize (does not fit)
             success = WindowOperator.resize_to_display(window, monitor_geom)
             if not success:
                 logger.debug("WindowOperator: resize failed, aborting sequence")
