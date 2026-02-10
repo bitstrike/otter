@@ -369,7 +369,7 @@ class EventHandler:
                         logger.error(f"Error activating window {xid}: {e}")
                         return
 
-                    GLib.idle_add(self.app.hide_window)
+                    # Don't hide - let edge detector handle it based on mouse position
                 else:
                     # Cross-workspace or cross-monitor case: resize+move then raise
                     try:
@@ -377,21 +377,21 @@ class EventHandler:
                             # Fallback: use pointer monitor again, but if still missing, perform normal activate
                             timestamp = Gtk.get_current_event_time()
                             window.activate(timestamp)
-                            GLib.idle_add(self.app.hide_window)
+                            # Don't hide - let edge detector handle it based on mouse position
                         else:
                             WindowOperator.resize_and_move_to_display(
                                 window,
                                 monitor_geom,
                                 app=self.app,
                                 window_manager=self.app.window_manager,
-                                hide_callback=lambda: GLib.idle_add(self.app.hide_window)
+                                hide_callback=None  # Don't hide - let edge detector handle it
                             )
                     except Exception as e:
                         logger.error(f"Error during resize/move sequence for window {xid}: {e}")
                         try:
                             timestamp = Gtk.get_current_event_time()
                             window.activate(timestamp)
-                            GLib.idle_add(self.app.hide_window)
+                            # Don't hide - let edge detector handle it based on mouse position
                         except Exception:
                             pass
             except Exception as e:
