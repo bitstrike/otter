@@ -95,19 +95,41 @@ class ScreenshotManager:
             display = Gdk.Display.get_default()
             if not display:
                 return None
-            
-            gdk_window = GdkX11.X11Window.foreign_new_for_display(display, xid)
-            if not gdk_window:
-                return None
-            
-            if gdk_window.is_viewable():
-                width = gdk_window.get_width()
-                height = gdk_window.get_height()
-                
-                if width > 0 and height > 0:
-                    pixbuf = Gdk.pixbuf_get_from_window(gdk_window, 0, 0, width, height)
-                    return pixbuf
-        
+
+            # Push an X11 error trap BEFORE creating the foreign window reference.
+            # GdkX11.X11Window.foreign_new_for_display() wraps an XID without
+            # verifying it still exists; subsequent calls (is_viewable, get_width,
+            # pixbuf_get_from_window) all issue X requests that can raise
+            # BadDrawable asynchronously if the window was destroyed between our
+            # Wnck validity check and the actual X server round-trip.
+            # Without a trap, GDK calls gdk_x_error() on the first such error
+            # and aborts the process.
+            Gdk.error_trap_push()
+            try:
+                gdk_window = GdkX11.X11Window.foreign_new_for_display(display, xid)
+                if not gdk_window:
+                    return None
+
+                if gdk_window.is_viewable():
+                    width = gdk_window.get_width()
+                    height = gdk_window.get_height()
+
+                    if width > 0 and height > 0:
+                        # Flush so all pending X requests (including any pending
+                        # DestroyNotify) are processed before we attempt the capture.
+                        display.flush()
+                        pixbuf = Gdk.pixbuf_get_from_window(gdk_window, 0, 0, width, height)
+                        # Sync here so any async error is raised now, inside the trap.
+                        display.sync()
+                        return pixbuf
+            finally:
+                x_error = Gdk.error_trap_pop()
+                if x_error:
+                    logger.debug(
+                        f"X11 error {x_error} while capturing window XID {xid} "
+                        f"(BadDrawable or similar — window was likely destroyed); skipping."
+                    )
+
         except Exception as e:
             logger.debug(f"Error capturing window: {e}")
         
@@ -161,6 +183,13 @@ class ScreenshotManager:
             current_windows: List of window info dicts
         """
         try:
+            # Skip entirely while Wnck screen is being torn down and rebuilt;
+            # XIDs in current_windows may refer to windows that no longer exist
+            # on the new screen and capturing them would trigger BadDrawable.
+            if self.window_manager.wnck_recreating:
+                logger.debug("Skipping cache update during Wnck recreation")
+                return
+
             # Get existing XIDs
             existing_xids = {w['xid'] for w in current_windows if w.get('xid')}
             cached_xids = set(self.screenshot_cache.keys())

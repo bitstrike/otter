@@ -124,10 +124,13 @@ class WindowManager:
             if not xid:
                 return False
             
-            # Additional validation: check if window still exists in current screen
-            if self.screen_wnck:
+            # Snapshot screen_wnck once; recreation on another code-path can swap
+            # self.screen_wnck at any moment and we must not use two different
+            # values of it within a single validation call.
+            screen = self.screen_wnck
+            if screen:
                 try:
-                    current_windows = self.screen_wnck.get_windows()
+                    current_windows = screen.get_windows()
                     if current_windows and window not in current_windows:
                         return False
                 except Exception:
@@ -328,7 +331,11 @@ class WindowManager:
                             is_minimized = False
                         
                         try:
-                            icon = window.get_icon()
+                            raw_icon = window.get_icon()
+                            # Copy the pixbuf data now so we hold no reference to
+                            # the Wnck window object after this loop iteration.
+                            # GdkPixbuf.copy() returns a fresh, standalone pixbuf.
+                            icon = raw_icon.copy() if raw_icon else None
                         except Exception:
                             icon = None
                         
