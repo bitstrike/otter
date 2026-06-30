@@ -6,8 +6,6 @@ import sys
 from typing import Dict, List
 import gi
 
-from .constants import DEFAULT_CONFIG
-
 logger = logging.getLogger(__name__)
 
 # Try to import Wnck for validation

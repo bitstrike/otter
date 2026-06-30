@@ -148,7 +148,7 @@ class ScreenshotManager:
             if not self.window_manager.window_is_valid(window):
                 return None
             
-            window_id = self.window_manager.get_window_id(window)
+            window_id = window.get_xid()
             
             # Check if minimized
             try:
@@ -161,13 +161,12 @@ class ScreenshotManager:
                 return self.last_valid_screenshots.get(window_id)
             
             # Try to capture
-            if self.window_manager.window_is_valid(window):
-                pixbuf = self.capture_window(window)
-                if pixbuf:
-                    scaled = self.scale_pixbuf(pixbuf)
-                    if scaled:
-                        self.last_valid_screenshots[window_id] = scaled
-                        return scaled
+            pixbuf = self.capture_window(window)
+            if pixbuf:
+                scaled = self.scale_pixbuf(pixbuf)
+                if scaled:
+                    self.last_valid_screenshots[window_id] = scaled
+                    return scaled
             
             # Return cached if available
             return self.last_valid_screenshots.get(window_id)

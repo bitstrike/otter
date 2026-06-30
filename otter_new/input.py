@@ -412,6 +412,11 @@ class EventHandler:
             True if handled
         """
         try:
+            # Left-click: handle here to work around Overlay eating the event
+            if event.button == 1:
+                self.on_window_clicked(button, xid)
+                return True
+
             # Right-click: context menu
             if event.button == 3:
                 self.app.show_context_menu(xid)
@@ -519,8 +524,6 @@ class EventHandler:
             logger.error(f"Error in _activate_window_after_switch: {e}")
         
         return False
-        
-        return False  # Don't repeat
     
     def _redisplay_after_workspace_switch(self) -> bool:
         """Redisplay otter window after workspace switch from middle-click

@@ -294,10 +294,10 @@ class SwitcherWindow:
         return WORKSPACE_COLORS[color_index]
 
     def populate(self, windows: List[Dict]):
-        """Populate window with thumbnails with enhanced validation
+        """Populate window with thumbnails
 
         Args:
-            windows: List of window info dictionaries
+            windows: List of window info dictionaries (already validated by get_user_windows)
         """
         # Clear existing buttons
         for button in self.window_buttons:
@@ -311,31 +311,15 @@ class SwitcherWindow:
             logger.debug("No windows to display")
             return
 
-        # Filter out invalid windows before processing
-        valid_windows = []
-        for window_info in windows:
-            xid = window_info.get('xid')
-            if xid:
-                # Validate window still exists
-                window = self.window_manager.get_window_by_xid(xid)
-                if window and self.window_manager.window_is_valid(window):
-                    valid_windows.append(window_info)
-                else:
-                    logger.debug(f"Filtering out invalid window {xid}")
-
-        if not valid_windows:
-            logger.debug("No valid windows to display after filtering")
-            return
-
         # Calculate layout
         rows, cols = calculate_layout_dimensions(
-            len(valid_windows),
+            len(windows),
             self.config.get('nrows'),
             self.config.get('ncols', 4)
         )
 
-        # Create thumbnails for valid windows only
-        for idx, window_info in enumerate(valid_windows):
+        # Create thumbnails
+        for idx, window_info in enumerate(windows):
             row = idx // cols
             col = idx % cols
 
@@ -620,13 +604,9 @@ class SwitcherWindow:
         when content is removed, causing the window to stay oversized.
         """
         try:
-            # Method 1: Reset size constraints and use preferred size
+            # Reset size constraints and request re-layout
             self.window.set_size_request(-1, -1)
             self.window.queue_resize()
-
-            # Process pending events to let GTK calculate new size
-            while Gtk.events_pending():
-                Gtk.main_iteration()
 
             # Try to get preferred size and resize
             try:
@@ -638,13 +618,11 @@ class SwitcherWindow:
             except Exception as e:
                 logger.debug(f"Preferred size method failed: {e}")
 
-            # Method 2: Calculate size based on grid content
+            # Fallback: Calculate size based on grid content
             try:
-                # Calculate expected size based on thumbnails
                 thumbnail_width = self.config.get('xsize', 160)
                 thumbnail_height = int(thumbnail_width * 0.75)
 
-                # Get current grid dimensions
                 rows = 0
                 cols = 0
                 for child in self.grid.get_children():
@@ -654,13 +632,11 @@ class SwitcherWindow:
                     rows = max(rows, top + 1)
 
                 if rows > 0 and cols > 0:
-                    # Calculate window size: thumbnails + spacing + margins + title bar
-                    grid_width = cols * thumbnail_width + (cols - 1) * 8 + 20  # 8px spacing, 10px margins each side
-                    grid_height = rows * (thumbnail_height + 30) + (rows - 1) * 8 + 20  # 30px for label, 8px spacing, margins
+                    grid_width = cols * thumbnail_width + (cols - 1) * 8 + 20
+                    grid_height = rows * (thumbnail_height + 30) + (rows - 1) * 8 + 20
 
-                    # Add title bar height if enabled
                     if self.config.get('show_title', True):
-                        grid_height += 60  # Approximate title bar height
+                        grid_height += 60
 
                     self.window.resize(grid_width, grid_height)
                     logger.debug(f"Resized window to calculated size: {grid_width}x{grid_height} (grid: {rows}x{cols})")

@@ -33,27 +33,9 @@ SYSTEM_APPS = [
     'Otter Window Switcher',
 ]
 
-# Default configuration
-DEFAULT_CONFIG = {
-    'nrows': None,
-    'ncols': 4,
-    'xsize': 160,
-    'show_title': True,
-    'hide_delay': 0,
-    'hide_duration': 0,
-    'north': True,
-    'south': False,
-    'east': False,
-    'west': False,
-    'recent': False,
-    'main_character': False,
-    'ignore_list': [],
-}
-
 # Performance tuning
 EDGE_TRIGGER_THRESHOLD = 5  # pixels
 MOUSE_POLL_INTERVAL = 100   # milliseconds
-CACHE_UPDATE_INTERVAL = 5000  # milliseconds
 MAX_CACHE_SIZE = 100  # screenshots
 
 # Wnck management

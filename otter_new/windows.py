@@ -13,6 +13,9 @@ from .constants import SYSTEM_APPS, WNCK_RECREATION_INTERVAL, WNCK_MAX_CALLS, WN
 
 logger = logging.getLogger(__name__)
 
+# Pre-built lowercase set for fast lookup
+_SYSTEM_APPS_LOWER = frozenset(app.lower() for app in SYSTEM_APPS)
+
 
 class WindowManager:
     """Manages Wnck screen and window operations"""
@@ -91,9 +94,11 @@ class WindowManager:
             Wnck.set_client_type(Wnck.ClientType.PAGER)
             self.screen_wnck = Wnck.Screen.get_default()
             
+            self._signal_handler_ids = []
             if self.screen_wnck and self.on_window_changed:
-                self.screen_wnck.connect("window-opened", self.on_window_changed)
-                self.screen_wnck.connect("window-closed", self.on_window_changed)
+                hid1 = self.screen_wnck.connect("window-opened", self.on_window_changed)
+                hid2 = self.screen_wnck.connect("window-closed", self.on_window_changed)
+                self._signal_handler_ids = [hid1, hid2]
             
             self.wnck_last_recreation = time.time()
             logger.info("Wnck screen initialized")
@@ -160,30 +165,15 @@ class WindowManager:
                 
                 window_list = self.screen_wnck.get_windows()
                 for window in window_list:
-                    if self.window_is_valid(window):
-                        try:
-                            if window.get_xid() == xid:
-                                return window
-                        except Exception:
-                            continue
+                    try:
+                        if window.get_xid() == xid:
+                            return window
+                    except Exception:
+                        continue
         except Exception as e:
             logger.debug(f"Error looking up window by XID {xid}: {e}")
         
         return None
-    
-    def get_window_id(self, window) -> int:
-        """Get unique identifier for window
-        
-        Args:
-            window: Wnck window object
-            
-        Returns:
-            XID or 0 on error
-        """
-        try:
-            return window.get_xid()
-        except Exception:
-            return 0
     
     def should_recreate_wnck(self) -> bool:
         """Check if Wnck screen should be recreated
@@ -229,18 +219,24 @@ class WindowManager:
             except Exception as e:
                 logger.debug(f"Error clearing caches during recreation: {e}")
             
-            time.sleep(0.2)  # Let old screen settle
-            
             self.screen_wnck = Wnck.Screen.get_default()
             
+            # Disconnect old signal handlers before reconnecting
+            if self.screen_wnck and hasattr(self, '_signal_handler_ids'):
+                for hid in self._signal_handler_ids:
+                    try:
+                        self.screen_wnck.disconnect(hid)
+                    except Exception:
+                        pass
+            
+            self._signal_handler_ids = []
             if self.screen_wnck and self.on_window_changed:
-                self.screen_wnck.connect("window-opened", self.on_window_changed)
-                self.screen_wnck.connect("window-closed", self.on_window_changed)
+                hid1 = self.screen_wnck.connect("window-opened", self.on_window_changed)
+                hid2 = self.screen_wnck.connect("window-closed", self.on_window_changed)
+                self._signal_handler_ids = [hid1, hid2]
             
             self.wnck_last_recreation = time.time()
             self.wnck_call_count = 0
-            
-            time.sleep(0.2)  # Let new screen settle
             
             self.wnck_recreating = False
             logger.info("Wnck screen recreated successfully")
@@ -318,7 +314,7 @@ class WindowManager:
                         )
                         
                         # Filter system apps and ignored windows
-                        if (app_name.lower() in [app.lower() for app in SYSTEM_APPS] or
+                        if (app_name.lower() in _SYSTEM_APPS_LOWER or
                             is_ignored or
                             window_name == "Otter Window Switcher" or
                             not window_name.strip()):

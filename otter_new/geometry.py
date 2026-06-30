@@ -1,7 +1,7 @@
 """Screen and monitor geometry utilities"""
 
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Tuple, Optional
 from gi.repository import Gdk
 
 logger = logging.getLogger(__name__)
@@ -47,30 +47,6 @@ def get_monitor_geometry(monitor: Gdk.Monitor) -> Dict[str, int]:
     except Exception as e:
         logger.error(f"Error getting monitor geometry: {e}")
         return {'x': 0, 'y': 0, 'width': 1920, 'height': 1080}
-
-
-def get_all_monitors() -> List[Dict[str, int]]:
-    """Get geometry for all monitors
-    
-    Returns:
-        List of monitor geometry dictionaries
-    """
-    monitors = []
-    try:
-        display = Gdk.Display.get_default()
-        if not display:
-            return [{'x': 0, 'y': 0, 'width': 1920, 'height': 1080}]
-        
-        n_monitors = display.get_n_monitors()
-        for i in range(n_monitors):
-            monitor = display.get_monitor(i)
-            if monitor:
-                monitors.append(get_monitor_geometry(monitor))
-    except Exception as e:
-        logger.error(f"Error getting monitors: {e}")
-        return [{'x': 0, 'y': 0, 'width': 1920, 'height': 1080}]
-    
-    return monitors if monitors else [{'x': 0, 'y': 0, 'width': 1920, 'height': 1080}]
 
 
 def get_pointer_position() -> Tuple[int, int]:
